@@ -13,7 +13,7 @@ func Run(
 	args []string,
 	stdout,
 	stderr io.Writer,
-	ghClient *ghClient,
+	ghClient GitHubClienter,
 	exitErrorHandler cli.ExitErrHandlerFunc,
 ) error {
 
@@ -56,12 +56,4 @@ func Run(
 	}
 
 	return app.Run(args)
-}
-
-func writeError(stderr io.Writer, format string, a ...any) {
-	fmt.Fprintf(stderr, format, a...)
-}
-
-func writeOut(stdout io.Writer, format string, a ...any) {
-	fmt.Fprintf(stdout, format, a...)
 }

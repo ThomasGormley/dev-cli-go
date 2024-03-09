@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 
 	cli "github.com/thomasgormley/dev-cli-go/internal"
 )
@@ -13,7 +12,7 @@ func main() {
 		os.Args,
 		os.Stdout,
 		os.Stderr,
-		cli.NewGitHubClient(os.Stderr, os.Stdin, exec.CommandContext),
+		cli.NewGitHubClient(os.Stderr, os.Stdin),
 		nil,
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

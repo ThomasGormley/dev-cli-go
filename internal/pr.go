@@ -11,20 +11,16 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-func handlePRCreate(stdout, stderr io.Writer, ghCli *ghClient) cli.ActionFunc {
+func handlePRCreate(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		stdout.Write([]byte("Creating a new pull request\n"))
 		if !isGitRepo() {
 			return cli.Exit("Not a git repo", 1)
 		}
 
-		fmt.Printf("Checking auth status\n")
-
-		if err := ghCli.AuthStatus(); err != nil {
+		if _, err := ghCli.AuthStatus(); err != nil {
 			return cli.Exit("Not authenticated with GitHub CLI, try running `gh auth login`", 1)
 		}
-
-		fmt.Printf("Checking if authenticated with GitHub CLI\n")
 
 		title, err := titleOrPrompt(c)
 
@@ -40,7 +36,6 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli *ghClient) cli.ActionFunc {
 
 		base := c.String("base")
 		if base == "" {
-			// TODO: prompt for base
 			stderr.Write([]byte("Base branch is required\n"))
 		}
 
@@ -51,7 +46,12 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli *ghClient) cli.ActionFunc {
 		}
 
 		fmt.Printf("Running gh with args: %v\n", ghArgs)
-		return nil
+
+		if _, err := ghCli.CreatePR(title, body, base); err != nil {
+			return cli.Exit(err, 1)
+		}
+
+		return cli.Exit("", 0)
 	}
 }
 

@@ -2,25 +2,37 @@ package cli_test
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"testing"
 
 	cli "github.com/thomasgormley/dev-cli-go/internal"
 	urfave "github.com/urfave/cli/v2"
 )
 
+type mockGitHubClient struct {
+	authStatusFunc func() (string, error)
+	createPRFunc   func(title, body, base string) (string, error)
+}
+
+func (m *mockGitHubClient) AuthStatus() (string, error) {
+	return m.authStatusFunc()
+}
+
+func (m *mockGitHubClient) CreatePR(title, body, base string) (string, error) {
+	fmt.Println("Creating PR with test args title:", title, "body:", body, "base:", base)
+	return m.createPRFunc(title, body, base)
+}
+
 func TestRunPrCreate(t *testing.T) {
 	tests := map[string]struct {
-		args         []string
-		wantExit     int
-		wantExitErr  string
-		prepare      func(t *testing.T, dir string)
-		ghCmdContext cli.CommandCtx
+		args        []string
+		wantExit    int
+		wantExitErr string
+		wantStdout  string
+		prepare     func(t *testing.T, dir string)
+		ghClient    cli.GitHubClienter
 	}{
 		"not a git repo": {
 			args:        nil,
@@ -28,19 +40,30 @@ func TestRunPrCreate(t *testing.T) {
 			wantExitErr: "Not a git repo",
 		},
 		"not authenticated": {
-			args:         nil,
-			wantExit:     1,
-			wantExitErr:  "Not authenticated with GitHub CLI, try running `gh auth login`",
-			ghCmdContext: createCommandContext(t, 1, "", ""),
+			args:        nil,
+			wantExit:    1,
+			wantExitErr: "Not authenticated with GitHub CLI, try running `gh auth login`",
+			ghClient: &mockGitHubClient{
+				authStatusFunc: func() (string, error) {
+					return "", fmt.Errorf("Not authenticated with GitHub CLI, try running `gh auth login`")
+				},
+			},
 			prepare: func(t *testing.T, dir string) {
 				initRepo(t, dir)
 			},
 		},
 		"with args": {
-			args:         []string{"--title", "PR title", "--body", "PR body", "--base", "main"},
-			wantExit:     0,
-			wantExitErr:  "",
-			ghCmdContext: createCommandContext(t, 0, "", ""),
+			args:        []string{"--title", "PR title", "--body", "PR body", "--base", "main"},
+			wantExit:    0,
+			wantExitErr: "",
+			ghClient: &mockGitHubClient{
+				authStatusFunc: func() (string, error) {
+					return "Logged in to github.com as thomasgormley", nil
+				},
+				createPRFunc: func(title, body, base string) (string, error) {
+					return "", nil
+				},
+			},
 			prepare: func(t *testing.T, dir string) {
 				initRepo(t, dir)
 			},
@@ -62,13 +85,11 @@ func TestRunPrCreate(t *testing.T) {
 				tc.prepare(t, dir)
 			}
 
-			gh := cli.NewGitHubClient(stderr, stdout, tc.ghCmdContext)
-
 			err := cli.Run(
 				append(baseArgs, tc.args...),
 				stdout,
 				stderr,
-				gh,
+				tc.ghClient,
 				func(c *urfave.Context, err error) {},
 			)
 
@@ -83,6 +104,7 @@ func TestRunPrCreate(t *testing.T) {
 			} else if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
+
 		})
 	}
 }
@@ -96,47 +118,5 @@ func initRepo(t *testing.T, dir string) {
 	init := exec.Command("git", "init")
 	if err := init.Run(); err != nil {
 		t.Fatal("error running git init:", err)
-	}
-}
-
-func TestHelperProcess(t *testing.T) {
-	if os.Getenv("GH_WANT_HELPER_PROCESS") != "1" {
-		return
-	}
-
-	if err := func(args []string) error {
-		fmt.Fprint(os.Stdout, os.Getenv("GH_HELPER_PROCESS_STDOUT"))
-		exitStatus := os.Getenv("GH_HELPER_PROCESS_EXIT_STATUS")
-		if exitStatus != "0" {
-			return errors.New("error")
-		}
-		return nil
-	}(os.Args[3:]); err != nil {
-		if wantErr := os.Getenv("GH_HELPER_PROCESS_STDERR"); wantErr != "" {
-			fmt.Fprint(os.Stderr, wantErr)
-		}
-		exitStatus := os.Getenv("GH_HELPER_PROCESS_EXIT_STATUS")
-		i, err := strconv.Atoi(exitStatus)
-		if err != nil {
-			os.Exit(1)
-		}
-		os.Exit(i)
-	}
-	os.Exit(0)
-}
-
-func createCommandContext(t *testing.T, exitStatus int, stdout, stderr string) cli.CommandCtx {
-	t.Helper()
-	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=TestHelperProcess", "--")
-	cmd.Env = []string{
-		"GH_WANT_HELPER_PROCESS=1",
-		fmt.Sprintf("GH_HELPER_PROCESS_STDOUT=%s", stdout),
-		fmt.Sprintf("GH_HELPER_PROCESS_STDERR=%s", stderr),
-		fmt.Sprintf("GH_HELPER_PROCESS_EXIT_STATUS=%v", exitStatus),
-	}
-	return func(ctx context.Context, exe string, args ...string) *exec.Cmd {
-		cmd.Args = append(cmd.Args, exe)
-		cmd.Args = append(cmd.Args, args...)
-		return cmd
 	}
 }
