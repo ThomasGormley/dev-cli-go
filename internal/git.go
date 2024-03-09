@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 )
@@ -12,6 +13,7 @@ func isGitRepo() bool {
 }
 
 func isAuthenticated() bool {
+	fmt.Println("Checking if authenticated with GitHub CLI")
 	cmd := exec.Command("gh", "auth", "status")
 	return cmd.Run() == nil
 }

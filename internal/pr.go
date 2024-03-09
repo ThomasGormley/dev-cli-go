@@ -11,16 +11,21 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-func handlePRCreate(stdout, stderr io.Writer) cli.ActionFunc {
+func handlePRCreate(stdout, stderr io.Writer, ghCli *ghClient) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		stdout.Write([]byte("Creating a new pull request\n"))
 		if !isGitRepo() {
 			return cli.Exit("Not a git repo", 1)
 		}
 
-		if !isAuthenticated() {
+		fmt.Printf("Checking auth status\n")
+
+		if err := ghCli.AuthStatus(); err != nil {
+			fmt.Printf("Error checking auth status: %v\n", err)
 			return cli.Exit("Not authenticated with GitHub CLI, try running `gh auth login`", 1)
 		}
+
+		fmt.Printf("Checking if authenticated with GitHub CLI\n")
 
 		title, err := titleOrPrompt(c)
 

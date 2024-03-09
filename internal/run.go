@@ -11,9 +11,9 @@ import (
 
 func Run(
 	args []string,
-	stdin io.Reader,
 	stdout,
 	stderr io.Writer,
+	ghClient *ghClient,
 	exitErrorHandler cli.ExitErrHandlerFunc,
 ) error {
 
@@ -31,7 +31,7 @@ func Run(
 					{
 						Name:   "create",
 						Usage:  "Create a new pull request",
-						Action: handlePRCreate(stdout, stderr),
+						Action: handlePRCreate(stdout, stderr, ghClient),
 						Flags: []cli.Flag{
 							&cli.StringFlag{
 								Name:    "title",
