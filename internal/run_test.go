@@ -14,7 +14,6 @@ func TestRunPrCreate(t *testing.T) {
 		args        []string
 		wantExit    int
 		wantExitErr string
-		wantStdOut  string
 		prepare     func(t *testing.T, dir string)
 	}{
 		"not a git repo": {
@@ -39,21 +38,15 @@ func TestRunPrCreate(t *testing.T) {
 			err := cli.Run(append(baseArgs, tc.args...), nil, stdout, stderr, func(c *urfave.Context, err error) {})
 
 			if exitErr, ok := err.(urfave.ExitCoder); ok {
-				// check exit code is not nil and matches expected
 				if got := exitErr.ExitCode(); got != tc.wantExit {
 					t.Errorf("exit code: got %d, want %d", got, tc.wantExit)
 				}
 
-				// check error message exits and matches expected
 				if got := err.Error(); got != tc.wantExitErr {
 					t.Errorf("exit error: got %q, want %q", got, tc.wantExitErr)
 				}
 			} else if err != nil {
 				t.Errorf("unexpected error: %v", err)
-			}
-
-			if got := stdout.String(); tc.wantStdOut != "" && got != tc.wantStdOut {
-				t.Errorf("stdout: got %q, want %q", got, tc.wantStdOut)
 			}
 		})
 	}
