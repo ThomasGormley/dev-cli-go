@@ -34,7 +34,15 @@ func TestRunPrCreate(t *testing.T) {
 			ghCmdContext: createCommandContext(t, 1, "", ""),
 			prepare: func(t *testing.T, dir string) {
 				initRepo(t, dir)
-				t.Setenv("GO_TEST_MODE", "GO_TEST_CLI_RUN")
+			},
+		},
+		"with args": {
+			args:         []string{"--title", "PR title", "--body", "PR body", "--base", "main"},
+			wantExit:     0,
+			wantExitErr:  "",
+			ghCmdContext: createCommandContext(t, 0, "", ""),
+			prepare: func(t *testing.T, dir string) {
+				initRepo(t, dir)
 			},
 		},
 	}

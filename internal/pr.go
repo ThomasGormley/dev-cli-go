@@ -21,7 +21,6 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli *ghClient) cli.ActionFunc {
 		fmt.Printf("Checking auth status\n")
 
 		if err := ghCli.AuthStatus(); err != nil {
-			fmt.Printf("Error checking auth status: %v\n", err)
 			return cli.Exit("Not authenticated with GitHub CLI, try running `gh auth login`", 1)
 		}
 
