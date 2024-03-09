@@ -15,23 +15,24 @@ func handlePRCreate(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		stdout.Write([]byte("Creating a new pull request\n"))
 		if !isGitRepo() {
-			writeError(stderr, "Not a git repository\n")
-			return nil
+			return cli.Exit("Not a git repo", 1)
 		}
 
 		if !isAuthenticated() {
-			stderr.Write([]byte("Not authenticated\n"))
-			return fmt.Errorf("not authenticated")
+			return cli.Exit("Not authenticated with GitHub CLI, try running `gh auth login`", 1)
 		}
 
 		title, err := titleOrPrompt(c)
 
 		if err != nil {
-			writeError(stderr, "Error getting title: %v\n", err)
-			return nil
+			return err
 		}
 
 		body, err := handleBody(c)
+
+		if err != nil {
+			return err
+		}
 
 		base := c.String("base")
 		if base == "" {

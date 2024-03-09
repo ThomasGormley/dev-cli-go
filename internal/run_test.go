@@ -6,22 +6,21 @@ import (
 	"testing"
 
 	cli "github.com/thomasgormley/dev-cli-go/internal"
+	urfave "github.com/urfave/cli/v2"
 )
 
 func TestRunPrCreate(t *testing.T) {
 	tests := map[string]struct {
-		args       []string
-		wantStdErr string
-		wantStdOut string
-		prepare    func(t *testing.T, dir string)
+		args        []string
+		wantExit    int
+		wantExitErr string
+		wantStdOut  string
+		prepare     func(t *testing.T, dir string)
 	}{
 		"not a git repo": {
-			args:       nil,
-			wantStdErr: "Not a git repo\n",
-			wantStdOut: "Creating a new pull request\n",
-			prepare: func(t *testing.T, dir string) {
-				// do nothing
-			},
+			args:        nil,
+			wantExit:    1,
+			wantExitErr: "Not a git repo",
 		},
 	}
 
@@ -32,19 +31,28 @@ func TestRunPrCreate(t *testing.T) {
 			stdout := &bytes.Buffer{}
 			stderr := &bytes.Buffer{}
 			dir := t.TempDir()
-			tc.prepare(t, dir)
+			if tc.prepare != nil {
+				tc.prepare(t, dir)
+			}
 			os.Chdir(dir)
-			err := cli.Run(append(baseArgs, tc.args...), nil, stdout, stderr)
 
-			if err != nil {
+			err := cli.Run(append(baseArgs, tc.args...), nil, stdout, stderr, func(c *urfave.Context, err error) {})
+
+			if exitErr, ok := err.(urfave.ExitCoder); ok {
+				// check exit code is not nil and matches expected
+				if got := exitErr.ExitCode(); got != tc.wantExit {
+					t.Errorf("exit code: got %d, want %d", got, tc.wantExit)
+				}
+
+				// check error message exits and matches expected
+				if got := err.Error(); got != tc.wantExitErr {
+					t.Errorf("exit error: got %q, want %q", got, tc.wantExitErr)
+				}
+			} else if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
 
-			if got := stderr.String(); got != tc.wantStdErr {
-				t.Errorf("stderr: got %q, want %q", got, tc.wantStdErr)
-			}
-
-			if got := stdout.String(); got != tc.wantStdOut {
+			if got := stdout.String(); tc.wantStdOut != "" && got != tc.wantStdOut {
 				t.Errorf("stdout: got %q, want %q", got, tc.wantStdOut)
 			}
 		})

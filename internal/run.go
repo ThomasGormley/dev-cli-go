@@ -14,13 +14,15 @@ func Run(
 	stdin io.Reader,
 	stdout,
 	stderr io.Writer,
+	exitErrorHandler cli.ExitErrHandlerFunc,
 ) error {
 
 	fmt.Printf("Running the cli with args: %v\n", args)
 	stdout.Write([]byte("Running the cli\n"))
 	app := &cli.App{
-		Name:  "dev-cli",
-		Usage: "A simple dev cli",
+		Name:           "dev-cli",
+		Usage:          "A simple dev cli",
+		ExitErrHandler: exitErrorHandler,
 		Commands: []*cli.Command{
 			{
 				Name:  "pr",
