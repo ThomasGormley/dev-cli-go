@@ -11,15 +11,17 @@ import (
 func TestRunPrCreate(t *testing.T) {
 	tests := map[string]struct {
 		args       []string
-		wantStdErr []byte
-		wantStdOut []byte
+		wantStdErr string
+		wantStdOut string
 		prepare    func(t *testing.T, dir string)
 	}{
 		"not a git repo": {
 			args:       nil,
-			wantStdErr: []byte("Not a git repository\n"),
-			wantStdOut: []byte("Creating a new pull request\n"),
-			prepare:    nil,
+			wantStdErr: "Not a git repo\n",
+			wantStdOut: "Creating a new pull request\n",
+			prepare: func(t *testing.T, dir string) {
+				// do nothing
+			},
 		},
 	}
 
@@ -30,10 +32,7 @@ func TestRunPrCreate(t *testing.T) {
 			stdout := &bytes.Buffer{}
 			stderr := &bytes.Buffer{}
 			dir := t.TempDir()
-			if tc.prepare != nil {
-				tc.prepare(t, dir)
-			}
-
+			tc.prepare(t, dir)
 			os.Chdir(dir)
 			err := cli.Run(append(baseArgs, tc.args...), nil, stdout, stderr)
 
@@ -41,16 +40,12 @@ func TestRunPrCreate(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 			}
 
-			if tc.wantStdErr != nil {
-				if !bytes.Equal(stderr.Bytes(), tc.wantStdErr) {
-					t.Errorf("Expected stderr: %s, got: %s", string(tc.wantStdErr), stderr.String())
-				}
+			if got := stderr.String(); got != tc.wantStdErr {
+				t.Errorf("stderr: got %q, want %q", got, tc.wantStdErr)
 			}
 
-			if tc.wantStdOut != nil {
-				if !bytes.Equal(stdout.Bytes(), tc.wantStdOut) {
-					t.Errorf("Expected stdout: %s, got: %s", string(tc.wantStdOut), stdout.String())
-				}
+			if got := stdout.String(); got != tc.wantStdOut {
+				t.Errorf("stdout: got %q, want %q", got, tc.wantStdOut)
 			}
 		})
 	}
