@@ -26,33 +26,32 @@ func isWorkstationDir(dir string) bool {
 }
 
 func firstupPRTemplate() (string, error) {
-	t, err := pullRequestTemplate()
-	if err != nil {
-		return "", err
+	template := repoPRTemplate()
+	if template == nil {
+		template = []byte(defaultPRTemplate)
 	}
 
-	if t == nil {
-		return defaultPRTemplate, nil
-	}
 	branch, err := gitBranch()
 	if err != nil {
 		return "", err
 	}
-	re := regexp.MustCompile(`^([A-Z]+-\d+)-(.*)`)
-	ticket := re.Find([]byte(branch))
 
-	if ticket == nil {
-		return string(t), nil
+	re := regexp.MustCompile(`([A-Z]+-\d+)`)
+	ticket := re.FindString(branch)
+
+	if ticket == "" {
+		return string(template), nil
 	}
 
-	ticketStr := string(ticket)
-	hasJiraLink := regexp.MustCompile(firstupJiraRegex).Match([]byte(string(t)))
-	if hasJiraLink {
-		withJira := re.ReplaceAll(ticket, jiraURLForTicket(ticketStr))
-		return string(withJira), nil
-	}
+	return string(applyJiraLinkToTemplate(template, ticket)), nil
+}
 
-	return string(t), nil
+func applyJiraLinkToTemplate(template []byte, ticket string) []byte {
+	re := regexp.MustCompile(`(https:\/\/(firstup-io|socialcoders)\.atlassian\.net\/browse\/[A-Z]+-\d*)`)
+	if !re.Match(template) {
+		return template
+	}
+	return re.ReplaceAll(template, jiraURLForTicket(ticket))
 }
 
 func jiraURLForTicket(ticket string) []byte {
@@ -64,4 +63,4 @@ https://firstup-io.atlassian.net/browse/FE-
 
 **Changes**`
 
-const firstupJiraRegex = `/https:\/\/(firstup-io|socialcoders)\.atlassian\.net\/browse\/[A-Z]+-/`
+const firstupJiraRegex = `https:\/\/(firstup-io|socialcoders)\.atlassian\.net\/browse\/[A-Z]+-\d*`

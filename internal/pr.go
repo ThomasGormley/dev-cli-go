@@ -13,7 +13,6 @@ import (
 
 func handlePRCreate(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		stdout.Write([]byte("Creating a new pull request\n"))
 		if !isGitRepo() {
 			return cli.Exit("Not a git repo", 1)
 		}
@@ -28,7 +27,7 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFu
 			return err
 		}
 
-		body, err := handleBody(c)
+		body, err := bodyOrPRTemplate(c)
 
 		if err != nil {
 			return err
@@ -59,12 +58,16 @@ func wrapWithQuotes(s string) string {
 	return fmt.Sprintf(`"%s"`, s)
 }
 
-func handleBody(c *cli.Context) (string, error) {
+func bodyOrPRTemplate(c *cli.Context) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	if body := c.String("body"); body == "" && isWorkstationDir(cwd) {
+	if body := c.String("body"); body == "" && !isWorkstationDir(cwd) {
+		body, err := firstupPRTemplate()
+		if err != nil {
+			return "", err
+		}
 		c.Set("body", body)
 	}
 	return c.String("body"), nil

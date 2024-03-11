@@ -3,6 +3,7 @@ module github.com/thomasgormley/dev-cli-go
 go 1.21.1
 
 require (
+	github.com/creack/pty v1.1.17 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/mattn/go-colorable v0.1.2 // indirect
 	github.com/mattn/go-isatty v0.0.8 // indirect
@@ -15,7 +16,9 @@ require (
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7
+	github.com/Netflix/go-expect v0.0.0-20220104043353-73e0943537d2
 	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
+	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/urfave/cli v1.22.14
 	github.com/urfave/cli/v2 v2.27.1

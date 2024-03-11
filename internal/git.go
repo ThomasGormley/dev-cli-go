@@ -1,10 +1,11 @@
 package cli
 
 import (
-	"errors"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 )
 
 func isGitRepo() bool {
@@ -21,7 +22,7 @@ func isAuthenticated() bool {
 func gitBranch() (string, error) {
 	cmd := exec.Command("git", "branch", "--show-current")
 	out, err := cmd.Output()
-	return string(out), err
+	return string(bytes.TrimSpace(out)), err
 }
 
 var gitPullRequestTemplatePaths = []string{
@@ -33,25 +34,31 @@ var gitPullRequestTemplatePaths = []string{
 
 const pullRequestTemplateFilename = "PULL_REQUEST_TEMPLATE.md"
 
-func pullRequestTemplate() ([]byte, error) {
+func repoPRTemplate() []byte {
 	root, err := gitRoot()
 
 	if err != nil {
-		return nil, err
+		return nil
 	}
 
 	for _, p := range gitPullRequestTemplatePaths {
-		path := root + p + pullRequestTemplateFilename
+		path := path.Join(root, p, pullRequestTemplateFilename)
 		if _, err := os.Stat(path); err == nil {
-			return os.ReadFile(path)
+			file, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			return file
 		}
 	}
-
-	return nil, errors.New("no pull request template found")
+	return nil
 }
 
 func gitRoot() (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
 	out, err := cmd.Output()
-	return string(out), err
+	if err != nil {
+		return "", err
+	}
+	return string(bytes.TrimSpace(out)), nil
 }
