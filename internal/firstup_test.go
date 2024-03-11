@@ -55,6 +55,22 @@ func TestFirstupPRTemplate(t *testing.T) {
 				}
 			},
 		},
+		"no ticket in branch name": {
+			want: "# PR Title",
+			prep: func(t *testing.T, dir string) {
+				initRepo(t, dir)
+				templatePath := path.Join(dir, ".github", "PULL_REQUEST_TEMPLATE")
+				os.MkdirAll(templatePath, 0755)
+				templateFile := path.Join(templatePath, "PULL_REQUEST_TEMPLATE.md")
+				if err := os.WriteFile(templateFile, []byte("# PR Title"), 0644); err != nil {
+					t.Fatal(err)
+				}
+
+				if err := exec.Command("git", "checkout", "-b", "test-branch").Run(); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
 	}
 
 	for name, tc := range testcases {

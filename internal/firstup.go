@@ -47,7 +47,7 @@ func firstupPRTemplate() (string, error) {
 }
 
 func applyJiraLinkToTemplate(template []byte, ticket string) []byte {
-	re := regexp.MustCompile(`(https:\/\/(firstup-io|socialcoders)\.atlassian\.net\/browse\/[A-Z]+-\d*)`)
+	re := regexp.MustCompile(firstupJiraRegex)
 	if !re.Match(template) {
 		return template
 	}
