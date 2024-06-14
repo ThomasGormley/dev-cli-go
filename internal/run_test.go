@@ -12,15 +12,15 @@ import (
 )
 
 type mockGitHubClient struct {
-	authStatusFunc func() (string, error)
-	createPRFunc   func(title, body, base string) (string, error)
+	authStatusFunc func() error
+	createPRFunc   func(title, body, base string) error
 }
 
-func (m *mockGitHubClient) AuthStatus() (string, error) {
+func (m *mockGitHubClient) AuthStatus() error {
 	return m.authStatusFunc()
 }
 
-func (m *mockGitHubClient) CreatePR(title, body, base string) (string, error) {
+func (m *mockGitHubClient) CreatePR(title, body, base string) error {
 	fmt.Println("Creating PR with test args title:", title, "body:", body, "base:", base)
 	return m.createPRFunc(title, body, base)
 }
@@ -44,8 +44,8 @@ func TestRunPrCreate(t *testing.T) {
 			wantExit:    1,
 			wantExitErr: "Not authenticated with GitHub CLI, try running `gh auth login`",
 			ghClient: &mockGitHubClient{
-				authStatusFunc: func() (string, error) {
-					return "", fmt.Errorf("Not authenticated with GitHub CLI, try running `gh auth login`")
+				authStatusFunc: func() error {
+					return fmt.Errorf("Not authenticated with GitHub CLI, try running `gh auth login`")
 				},
 			},
 			prepare: func(t *testing.T, dir string) {
@@ -57,11 +57,11 @@ func TestRunPrCreate(t *testing.T) {
 			wantExit:    0,
 			wantExitErr: "",
 			ghClient: &mockGitHubClient{
-				authStatusFunc: func() (string, error) {
-					return "Logged in to github.com as thomasgormley", nil
+				authStatusFunc: func() error {
+					return nil
 				},
-				createPRFunc: func(title, body, base string) (string, error) {
-					return "", nil
+				createPRFunc: func(title, body, base string) error {
+					return nil
 				},
 			},
 			prepare: func(t *testing.T, dir string) {
