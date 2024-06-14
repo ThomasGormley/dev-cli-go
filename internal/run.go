@@ -22,6 +22,7 @@ func Run(
 		ExitErrHandler:       exitErrorHandler,
 		EnableBashCompletion: true,
 		Commands: []*cli.Command{
+			// PR definition
 			{
 				Name:  "pr",
 				Usage: "Wrapper around gh cli",
@@ -54,6 +55,28 @@ func Run(
 								Value:   false,
 							},
 						},
+					},
+				},
+			},
+			{
+				// Diary definition
+				Name:  "diary",
+				Usage: "For working with engineering diaries",
+				Subcommands: []*cli.Command{
+					{
+						Name:   "new",
+						Usage:  "Create a new diary entry",
+						Action: handleDiaryNew(stdout, stderr),
+					},
+					{
+						Name:   "open",
+						Usage:  "Open today's diary entry",
+						Action: handleDiaryOpen(stdout, stderr),
+					},
+					{
+						Name:   "sync",
+						Usage:  "Sync diary entries to remote",
+						Action: handleDiarySync(stdout, stderr),
 					},
 				},
 			},

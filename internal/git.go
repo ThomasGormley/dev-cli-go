@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"os/exec"
 	"path"
@@ -10,12 +9,6 @@ import (
 
 func isGitRepo() bool {
 	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	return cmd.Run() == nil
-}
-
-func isAuthenticated() bool {
-	fmt.Println("Checking if authenticated with GitHub CLI")
-	cmd := exec.Command("gh", "auth", "status")
 	return cmd.Run() == nil
 }
 
