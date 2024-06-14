@@ -13,9 +13,8 @@ const diaryDir = "/Users/thomas/dev/engineering-diary"
 func handleDiaryNew(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		today := time.Now()
-		stdout.Write([]byte("Creating a new diary entry for " + today.Format("2006-01-02") + "...\n"))
-		newEntryScript := path.Join(diaryDir, "scripts", "new-entry.sh")
-		err := prepareCmd(nil, stdout, stderr, newEntryScript).Run()
+		stdout.Write([]byte("Creating a new diary entry for " + today.Format(time.DateOnly) + "...\n"))
+		err := prepareCmd(nil, stdout, stderr, path.Join(diaryDir, "scripts", "new-entry.sh")).Run()
 		if err != nil {
 			return cli.Exit(err, 1)
 		}
@@ -27,9 +26,8 @@ func handleDiaryNew(stdout, stderr io.Writer) cli.ActionFunc {
 func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		today := time.Now()
-		stdout.Write([]byte("Opening today's diary entry, " + today.Format("2006-01-02") + "...\n"))
-		openEntryScript := path.Join(diaryDir, "scripts", "open.sh")
-		err := prepareCmd(nil, stdout, stderr, openEntryScript).Run()
+		stdout.Write([]byte("Opening today's diary entry, " + today.Format(time.DateOnly) + "...\n"))
+		err := prepareCmd(nil, stdout, stderr, path.Join(diaryDir, "scripts", "open.sh")).Run()
 		if err != nil {
 			return cli.Exit(err, 1)
 		}
@@ -41,8 +39,7 @@ func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 func handleDiarySync(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		stdout.Write([]byte("Syncing diary entries...\n"))
-		syncScript := path.Join(diaryDir, "scripts", "commit-changes.sh")
-		err := prepareCmd(nil, stdout, stderr, syncScript).Run()
+		err := prepareCmd(nil, stdout, stderr, path.Join(diaryDir, "scripts", "commit-changes.sh")).Run()
 		if err != nil {
 			return cli.Exit(err, 1)
 		}

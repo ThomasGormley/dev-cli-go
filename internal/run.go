@@ -17,8 +17,9 @@ func Run(
 ) error {
 
 	app := &cli.App{
-		Name:                 "dev-cli",
-		Usage:                "a simple dev cli",
+		Name:                 "dev",
+		HelpName:             "dev",
+		Usage:                "Personal development CLI toolbox",
 		ExitErrHandler:       exitErrorHandler,
 		EnableBashCompletion: true,
 		Commands: []*cli.Command{
