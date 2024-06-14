@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"io"
+	"log"
 	"os/exec"
 )
 
@@ -19,8 +20,9 @@ type ghClient struct {
 
 func (g *ghClient) AuthStatus() error {
 	cmd := g.prepareCmd("gh", "auth", "status")
-	cmd.Stdout = nil
+	cmd.Stdout = nil // gh auth status writes to stdout, we don't need to see it
 	err := cmd.Run()
+	log.Fatalf("error: %v\n", err)
 	if err != nil {
 		return err
 	}

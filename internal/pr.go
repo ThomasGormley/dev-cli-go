@@ -38,24 +38,12 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFu
 			stderr.Write([]byte("Base branch is required\n"))
 		}
 
-		ghArgs := []string{"pr", "create",
-			"--title", wrapWithQuotes(title),
-			"--body", wrapWithQuotes(body),
-			"--base", wrapWithQuotes(base),
-		}
-
-		fmt.Printf("Running gh with args: %v\n", ghArgs)
-
 		if err := ghCli.CreatePR(title, body, base); err != nil {
 			return cli.Exit(err, 1)
 		}
 
 		return cli.Exit("", 0)
 	}
-}
-
-func wrapWithQuotes(s string) string {
-	return fmt.Sprintf(`"%s"`, s)
 }
 
 func bodyOrPRTemplate(c *cli.Context) (string, error) {
