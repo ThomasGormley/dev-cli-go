@@ -60,18 +60,21 @@ func Run(
 			},
 			{
 				// Diary definition
-				Name:  "diary",
-				Usage: "For working with engineering diaries",
+				Name:    "diary",
+				Usage:   "For working with engineering diaries",
+				Aliases: []string{"d"},
 				Subcommands: []*cli.Command{
 					{
-						Name:   "new",
-						Usage:  "Create a new diary entry",
-						Action: handleDiaryNew(stdout, stderr),
+						Name:    "new",
+						Usage:   "Create a new diary entry",
+						Aliases: []string{"n"},
+						Action:  handleDiaryNew(stdout, stderr),
 					},
 					{
-						Name:   "open",
-						Usage:  "Open today's diary entry",
-						Action: handleDiaryOpen(stdout, stderr),
+						Name:    "open",
+						Usage:   "Open today's diary entry",
+						Aliases: []string{"o"},
+						Action:  handleDiaryOpen(stdout, stderr),
 					},
 					{
 						Name:   "sync",
