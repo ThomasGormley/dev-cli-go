@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"io"
 
 	"github.com/urfave/cli/v2"
@@ -17,12 +16,11 @@ func Run(
 	exitErrorHandler cli.ExitErrHandlerFunc,
 ) error {
 
-	fmt.Printf("Running the cli with args: %v\n", args)
-	stdout.Write([]byte("Running the cli\n"))
 	app := &cli.App{
-		Name:           "dev-cli",
-		Usage:          "A simple dev cli",
-		ExitErrHandler: exitErrorHandler,
+		Name:                 "dev-cli",
+		Usage:                "a simple dev cli",
+		ExitErrHandler:       exitErrorHandler,
+		EnableBashCompletion: true,
 		Commands: []*cli.Command{
 			{
 				Name:  "pr",
@@ -35,18 +33,25 @@ func Run(
 						Flags: []cli.Flag{
 							&cli.StringFlag{
 								Name:    "title",
-								Usage:   "Title of the pull request",
+								Usage:   "title of the pull request",
 								Aliases: []string{"t"},
 							},
 							&cli.StringFlag{
 								Name:    "body",
-								Usage:   "Body of the pull request",
+								Usage:   "body of the pull request",
 								Aliases: []string{"b"},
 							},
 							&cli.StringFlag{
 								Name:    "base",
-								Usage:   "Base branch",
+								Usage:   "base branch",
 								Aliases: []string{"B"},
+								EnvVars: []string{"TEAM_BRANCH"},
+							},
+							&cli.BoolFlag{
+								Name:    "draft",
+								Usage:   "mark the pull request as a draft",
+								Aliases: []string{"d"},
+								Value:   false,
 							},
 						},
 					},

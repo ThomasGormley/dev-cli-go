@@ -90,6 +90,35 @@ func TestFirstupPRTemplate(t *testing.T) {
 
 }
 
+func TestIsWorkstationDir(t *testing.T) {
+	testcases := map[string]struct {
+		want bool
+		dir  string
+	}{
+		"socialchorus dir": {
+			want: true,
+			dir:  "/opt/socialchorus/optimus",
+		},
+		"firstup dir": {
+			want: true,
+			dir:  "/opt/firstup/pythia",
+		},
+		"not a workstation dir": {
+			want: false,
+			dir:  "~/dev/mercury",
+		},
+	}
+
+	for name, tc := range testcases {
+		t.Run(name, func(t *testing.T) {
+			got := isWorkstationDir(tc.dir)
+			if got != tc.want {
+				t.Errorf("expected %v, got %v", tc.want, got)
+			}
+		})
+	}
+}
+
 func initRepo(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.Chdir(dir); err != nil {

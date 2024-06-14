@@ -17,7 +17,7 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFu
 			return cli.Exit("Not a git repo", 1)
 		}
 
-		if _, err := ghCli.AuthStatus(); err != nil {
+		if err := ghCli.AuthStatus(); err != nil {
 			return cli.Exit("Not authenticated with GitHub CLI, try running `gh auth login`", 1)
 		}
 
@@ -46,7 +46,7 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFu
 
 		fmt.Printf("Running gh with args: %v\n", ghArgs)
 
-		if _, err := ghCli.CreatePR(title, body, base); err != nil {
+		if err := ghCli.CreatePR(title, body, base); err != nil {
 			return cli.Exit(err, 1)
 		}
 
@@ -63,7 +63,7 @@ func bodyOrPRTemplate(c *cli.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if body := c.String("body"); body == "" && !isWorkstationDir(cwd) {
+	if body := c.String("body"); body == "" && isWorkstationDir(cwd) {
 		body, err := firstupPRTemplate()
 		if err != nil {
 			return "", err
