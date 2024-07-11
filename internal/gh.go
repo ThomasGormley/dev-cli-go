@@ -3,13 +3,13 @@ package cli
 import (
 	"context"
 	"io"
-	"log"
 	"os/exec"
 )
 
 type GitHubClienter interface {
 	AuthStatus() error
 	CreatePR(title, body, base string) error
+	ViewPR(identifier string) error
 }
 
 type ghClient struct {
@@ -22,7 +22,6 @@ func (g *ghClient) AuthStatus() error {
 	cmd := g.prepareCmd("gh", "auth", "status")
 	cmd.Stdout = nil // gh auth status writes to stdout, we don't need to see it
 	err := cmd.Run()
-	log.Fatalf("error: %v\n", err)
 	if err != nil {
 		return err
 	}
@@ -31,6 +30,19 @@ func (g *ghClient) AuthStatus() error {
 
 func (g *ghClient) CreatePR(title, body, base string) error {
 	cmd := g.prepareCmd("gh", "pr", "create", "--title", title, "--body", body, "--base", base)
+	err := cmd.Run()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (g *ghClient) ViewPR(identifier string) error {
+	args := []string{"pr", "view"}
+	if identifier != "" {
+		args = append(args, identifier)
+	}
+	cmd := g.prepareCmd("gh", append(args, "--web")...)
 	err := cmd.Run()
 	if err != nil {
 		return err

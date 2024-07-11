@@ -57,6 +57,12 @@ func Run(
 							},
 						},
 					},
+					{
+						Name:    "view",
+						Usage:   "View a pull request",
+						Aliases: []string{"v"},
+						Action:  handlePRView(stdout, stderr, ghClient),
+					},
 				},
 			},
 			{

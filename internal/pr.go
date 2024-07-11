@@ -46,6 +46,13 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFu
 	}
 }
 
+func handlePRView(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFunc {
+	return func(c *cli.Context) error {
+		identifier := c.Args().First()
+		return ghCli.ViewPR(identifier)
+	}
+}
+
 func bodyOrPRTemplate(c *cli.Context) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {

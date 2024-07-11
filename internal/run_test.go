@@ -25,6 +25,10 @@ func (m *mockGitHubClient) CreatePR(title, body, base string) error {
 	return m.createPRFunc(title, body, base)
 }
 
+func (m *mockGitHubClient) ViewPR(identifier string) error {
+	return nil
+}
+
 func TestRunPrCreate(t *testing.T) {
 	tests := map[string]struct {
 		args        []string
