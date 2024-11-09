@@ -63,6 +63,12 @@ func Run(
 						Aliases: []string{"v"},
 						Action:  handlePRView(stdout, stderr, ghClient),
 					},
+					{
+						Name:    "merge",
+						Usage:   "Merge a pull request",
+						Aliases: []string{"m"},
+						Action:  handlePRMerge(stdout, stderr, ghClient),
+					},
 				},
 			},
 			{
