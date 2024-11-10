@@ -90,6 +90,17 @@ const (
 	UNSTABLE MergeStateStatus = "UNSTABLE"
 )
 
+type MergeStrategy string
+
+const (
+	// The head ref is out of date.
+	MergeSquash MergeStrategy = "squash"
+	// The merge is blocked.
+	MergeCommit MergeStrategy = "merge"
+	// Mergeable and passing commit status.
+	MergeRebase MergeStrategy = "rebase"
+)
+
 type PRStatusResponse struct {
 	CurrentBranch struct {
 		Additions    int    `json:"additions"`
