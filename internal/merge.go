@@ -28,17 +28,6 @@ func handlePRMerge(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFun
 	}
 }
 
-func checkStatus(identifier string, ghCli GitHubClienter) func() tea.Msg {
-	return func() tea.Msg {
-		status, err := ghCli.PRStatus(identifier)
-		if err != nil {
-			return tea.Printf("error getting status: %+v", err)
-		}
-
-		return status
-	}
-}
-
 var (
 	docStyle  = lipgloss.NewStyle().Margin(1, 2)
 	checkMark = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).SetString("✓")
@@ -72,17 +61,7 @@ func initialModel(identifier string, ghCli GitHubClienter) handleMergeModel {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
-	d := list.NewDefaultDelegate()
-	d.Styles.NormalTitle = d.Styles.NormalTitle.Bold(true)
-	d.Styles.SelectedTitle = lipgloss.NewStyle().
-		Bold(true).
-		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(lipgloss.Color("#F97415")).
-		Foreground(lipgloss.Color("#F97415")).
-		Padding(0, 0, 0, 1)
-
-	d.Styles.SelectedDesc = d.Styles.SelectedTitle.
-		Foreground(lipgloss.Color("#F97415"))
+	d := NewDelegate()
 
 	l := list.New([]list.Item{}, d, 0, 0)
 	l.Title = "Status Checks"
@@ -132,7 +111,7 @@ func (m handleMergeModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.form.Init(),
 		m.spinner.Tick,
-		checkStatus(m.identifier, m.ghClient),
+		awaitStatusCheckCmd(m.identifier, m.ghClient),
 	)
 }
 
@@ -193,27 +172,27 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.list.SetSize((msg.Width-h)/2, msg.Height-v)
-	case PRStatusResponse:
-		checkItems := make([]list.Item, 0)
-		for _, check := range msg.CurrentBranch.StatusCheckRollup {
-			checkItems = append(checkItems, statusCheckItem{
-				name:       check.Name,
-				context:    check.Context,
-				conclusion: check.Conclusion,
-				state:      check.State,
-				url:        check.DetailsURL,
-			})
-		}
-		m.mergeStateStatus = msg.CurrentBranch.MergeStateStatus
-		if m.mergeStateStatus == UNSTABLE {
+	case statusCheckCmd:
+		m.mergeStateStatus = msg.mergeStateStatus
+
+		switch msg.mergeStateStatus {
+		case CLEAN:
+			return m, tea.Println(docStyle.Render(fmt.Sprintf("%s All checks have passed", checkMark)))
+		case UNSTABLE:
 			m.list.Title = "Some checks were unsuccessful, cannot merge"
 			return m, tea.Sequence(
 				tea.EnterAltScreen,
-				m.list.SetItems(checkItems),
+				m.list.SetItems(msg.checks),
 			)
+		default:
+			m.list.Title = fmt.Sprintf("Unable to merge, unhandled status: %s", msg.mergeStateStatus)
+			return m, tea.Sequence(
+				tea.EnterAltScreen,
+				m.list.SetItems(msg.checks),
+			)
+
 		}
 
-		return m, tea.Println(docStyle.Render(fmt.Sprintf("%s All checks have passed", checkMark)))
 	case mergeResponse:
 		m.merged = true
 		return m, tea.Sequence(
