@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,11 +11,11 @@ import (
 
 type mergeCmd int
 
-// func awaitMerge(strategy MergeStrategy) tea.Cmd {
-// 	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
-// 		return mergeCmd(200)
-// 	})
-// }
+func awaitMerge(strategy MergeStrategy) tea.Cmd {
+	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+		return mergeCmd(200)
+	})
+}
 
 type statusCheckCmd struct {
 	checks           []list.Item

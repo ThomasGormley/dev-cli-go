@@ -5,7 +5,6 @@ import (
 	"io"
 	"os/exec"
 	"runtime"
-	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -193,7 +192,7 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		}
 
-	case mergeResponse:
+	case mergeCmd:
 		m.merged = true
 		return m, tea.Sequence(
 			tea.Println(docStyle.Render(fmt.Sprintf("%s Merged successfully", checkMark))),
@@ -213,20 +212,11 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, awaitMerge(MergeStrategy(s)))
 	} else if len(m.form.Errors()) > 0 {
 		return m, tea.Quit
-
 	}
 
 	m.list, cmd = m.list.Update(msg)
 	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
-}
-
-type mergeResponse int
-
-func awaitMerge(strategy MergeStrategy) tea.Cmd {
-	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
-		return mergeResponse(200)
-	})
 }
 
 func openBrowser(url string) error {
