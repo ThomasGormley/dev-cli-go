@@ -29,6 +29,14 @@ func (m *mockGitHubClient) ViewPR(identifier string) error {
 	return nil
 }
 
+func (m *mockGitHubClient) PRStatus(identifier string) (cli.PRStatusResponse, error) {
+	return cli.PRStatusResponse{}, nil
+}
+
+func (m *mockGitHubClient) MergePR(strategy cli.MergeStrategy) error {
+	return nil
+}
+
 func TestRunPrCreate(t *testing.T) {
 	tests := map[string]struct {
 		args        []string

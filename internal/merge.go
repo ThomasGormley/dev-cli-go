@@ -44,7 +44,6 @@ var keys = keyMap{
 type handleMergeModel struct {
 	mergeStateStatus MergeStateStatus
 	merged           bool
-	strategy         MergeStrategy
 	messages         []string
 	spinner          spinner.Model
 	list             list.Model
@@ -134,7 +133,7 @@ func (m handleMergeModel) View() string {
 	} else if m.form.State == huh.StateAborted {
 		return docStyle.Render(spin + "Merging cancelled")
 	}
-	if m.mergeStateStatus == UNSTABLE && len(m.list.Items()) > 0 {
+	if m.mergeStateStatus != CLEAN && len(m.list.Items()) > 0 {
 		lipgloss.JoinVertical(
 			lipgloss.Left,
 			m.list.View(),
@@ -174,6 +173,13 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusCheckCmd:
 		m.mergeStateStatus = msg.mergeStateStatus
 
+		if len(msg.checks) == 0 && msg.mergeStateStatus == "" {
+			return m, tea.Sequence(
+				tea.Println("No PR available"),
+				tea.Quit,
+			)
+		}
+
 		switch msg.mergeStateStatus {
 		case CLEAN:
 			return m, tea.Println(docStyle.Render(fmt.Sprintf("%s All checks have passed", checkMark)))
@@ -208,8 +214,10 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 	if m.form.State == huh.StateCompleted {
-		s := m.form.GetString("mergeStrategy")
-		cmds = append(cmds, awaitMerge(MergeStrategy(s)))
+		s := m.form.Get("mergeStrategy")
+		if strat := s.(MergeStrategy); strat != "" {
+			cmds = append(cmds, awaitMerge(strat, m.ghClient))
+		}
 	} else if len(m.form.Errors()) > 0 {
 		return m, tea.Quit
 	}

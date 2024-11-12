@@ -3,18 +3,22 @@ package cli
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type mergeCmd int
+type mergeCmd string
 
-func awaitMerge(strategy MergeStrategy) tea.Cmd {
-	return tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
-		return mergeCmd(200)
-	})
+func awaitMerge(strategy MergeStrategy, ghCli GitHubClienter) tea.Cmd {
+	return func() tea.Msg {
+		err := ghCli.MergePR(strategy)
+		if err != nil {
+			// return err command
+			return nil
+		}
+		return mergeCmd("")
+	}
 }
 
 type statusCheckCmd struct {
@@ -35,6 +39,7 @@ func awaitStatusCheckCmd(identifier string, ghCli GitHubClienter) tea.Cmd {
 				context:    check.Context,
 				conclusion: check.Conclusion,
 				state:      check.State,
+				status:     check.Status,
 				url:        check.DetailsURL,
 			})
 		}
@@ -50,6 +55,7 @@ type statusCheckItem struct {
 	context    string
 	conclusion string
 	state      string
+	status     string
 	url        string
 }
 
@@ -64,6 +70,8 @@ func (i statusCheckItem) Description() string {
 	desc := i.conclusion
 	if i.conclusion == "" {
 		desc = i.state
+	} else if i.state == "" {
+		desc = i.status
 	}
 	return withIcon(desc)
 }

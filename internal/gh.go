@@ -15,6 +15,7 @@ type GitHubClienter interface {
 	CreatePR(title, body, base string) error
 	ViewPR(identifier string) error
 	PRStatus(identifier string) (PRStatusResponse, error)
+	MergePR(s MergeStrategy) error
 }
 
 type ghClient struct {
@@ -171,6 +172,27 @@ func (g *ghClient) PRStatus(identifier string) (PRStatusResponse, error) {
 	}
 
 	return resp, nil
+}
+
+func (g *ghClient) MergePR(strategy MergeStrategy) error {
+	args := []string{"pr", "merge", "--delete-branch"}
+	switch strategy {
+	case MergeSquash:
+		args = append(args, "--squash")
+	case MergeCommit:
+		args = append(args, "--merge")
+	case MergeRebase:
+		args = append(args, "--rebase")
+	default:
+		return fmt.Errorf("missing or invalid merge strategy %s", strategy)
+	}
+	cmd := g.prepareCmd("gh", args...)
+	var outBuffer bytes.Buffer
+	cmd.Stdout = &outBuffer
+	cmd.Stdin = nil
+
+	// cmd.Env = append(cmd.Env, "GH_PROMPT_DISABLED=true")
+	return cmd.Run()
 }
 
 func (g *ghClient) prepareCmd(name string, args ...string) *exec.Cmd {
