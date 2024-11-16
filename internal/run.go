@@ -3,6 +3,7 @@ package cli
 import (
 	"io"
 
+	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/urfave/cli/v2"
 )
 
@@ -12,7 +13,7 @@ func Run(
 	args []string,
 	stdout,
 	stderr io.Writer,
-	ghClient GitHubClienter,
+	ghClient gh.GitHubClienter,
 	exitErrorHandler cli.ExitErrHandlerFunc,
 ) error {
 
@@ -62,6 +63,12 @@ func Run(
 						Usage:   "View a pull request",
 						Aliases: []string{"v"},
 						Action:  handlePRView(stdout, stderr, ghClient),
+					},
+					{
+						Name:    "merge",
+						Usage:   "Merge a pull request",
+						Aliases: []string{"m"},
+						Action:  handlePRMerge(stdout, stderr, ghClient),
 					},
 				},
 			},

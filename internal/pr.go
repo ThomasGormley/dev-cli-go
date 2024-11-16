@@ -8,10 +8,11 @@ import (
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
+	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/urfave/cli/v2"
 )
 
-func handlePRCreate(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFunc {
+func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		if !isGitRepo() {
 			return cli.Exit("Not a git repo", 1)
@@ -46,7 +47,7 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFu
 	}
 }
 
-func handlePRView(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFunc {
+func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		identifier := c.Args().First()
 		return ghCli.ViewPR(identifier)

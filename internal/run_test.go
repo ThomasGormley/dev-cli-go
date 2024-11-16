@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	cli "github.com/thomasgormley/dev-cli-go/internal"
+	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	urfave "github.com/urfave/cli/v2"
 )
 
@@ -29,6 +30,14 @@ func (m *mockGitHubClient) ViewPR(identifier string) error {
 	return nil
 }
 
+func (m *mockGitHubClient) PRStatus(identifier string) (gh.PRStatusResponse, error) {
+	return gh.PRStatusResponse{}, nil
+}
+
+func (m *mockGitHubClient) MergePR(strategy gh.MergeStrategy) error {
+	return nil
+}
+
 func TestRunPrCreate(t *testing.T) {
 	tests := map[string]struct {
 		args        []string
@@ -36,7 +45,7 @@ func TestRunPrCreate(t *testing.T) {
 		wantExitErr string
 		wantStdout  string
 		prepare     func(t *testing.T, dir string)
-		ghClient    cli.GitHubClienter
+		ghClient    gh.GitHubClienter
 	}{
 		"not a git repo": {
 			args:        nil,

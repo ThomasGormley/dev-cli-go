@@ -5,7 +5,6 @@ tmp_dir = "tmp"
 [build]
   bin = "./bin/dev-development"  # Path where the binary is built
   cmd = "go build -o ./bin/dev-development ."  # Build command
-  full_bin = "/usr/local/bin/devd"  # Using the symlink to run the application
   delay = 1000
   exclude_dir = ["assets", "tmp", "vendor", "testdata"]
   exclude_regex = ["_test.go"]
@@ -36,5 +35,5 @@ tmp_dir = "tmp"
   clean_on_exit = false
 
 [screen]
-  clear_on_rebuild = false
+  clear_on_rebuild = true
   keep_scroll = true

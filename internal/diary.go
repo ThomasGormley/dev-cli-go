@@ -2,6 +2,7 @@ package cli
 
 import (
 	"io"
+	"os/exec"
 	"path"
 	"time"
 
@@ -46,4 +47,13 @@ func handleDiarySync(stdout, stderr io.Writer) cli.ActionFunc {
 
 		return nil
 	}
+}
+
+func prepareCmd(stdin io.Reader, stdout, stderr io.Writer, name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = stdout
+	cmd.Stdin = stdin
+	cmd.Stderr = stderr
+
+	return cmd
 }
