@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/thomasgormley/dev-cli-go/internal/tui"
 	"github.com/urfave/cli/v2"
 )
 
@@ -50,6 +51,7 @@ type handleMergeModel struct {
 	suspended bool
 	merged    bool
 	content   string
+	view      string
 
 	// PR
 	title            string
@@ -65,6 +67,7 @@ type handleMergeModel struct {
 	spinner       spinner.Model
 	list          list.Model
 	width, height int
+	mergeButtons  tea.Model
 }
 
 func initialModel(identifier string, ghCli GitHubClienter) handleMergeModel {
@@ -91,6 +94,7 @@ func initialModel(identifier string, ghCli GitHubClienter) handleMergeModel {
 		list:             l,
 		identifier:       identifier,
 		ghClient:         ghCli,
+		mergeButtons:     tui.NewMergeButtons(),
 	}
 }
 
@@ -127,7 +131,13 @@ func (m handleMergeModel) View() string {
 		fmt.Sprintf("(%s -> %s)", codeHighlight.Render(m.head), codeHighlight.Render(m.base)),
 	)
 
-	content := docStyle.Render(m.content)
+	var content string
+	switch m.view {
+	case "mergeSelection":
+		content = docStyle.Render(m.mergeButtons.View())
+	default:
+		content = docStyle.Render(m.content)
+	}
 	// if len(m.form.Errors()) > 0 {
 	// 	return ""
 	// }
@@ -158,6 +168,9 @@ func (m handleMergeModel) View() string {
 }
 
 func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -195,7 +208,7 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.mergeStateStatus {
 		case CLEAN:
-			m.content = fmt.Sprintf("%s All checks have passed\n\n", checkMark)
+			m.view = "mergeSelection"
 			return m, nil
 		case UNSTABLE:
 			m.list.Title = "Some checks were unsuccessful, cannot merge"
@@ -220,9 +233,18 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 	}
 
-	var cmds []tea.Cmd
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
+	switch m.view {
+	case "mergeSelection":
+		mergeBtns, mergeCmd := m.mergeButtons.Update(msg)
+		mergeModel, ok := mergeBtns.(tui.MergeButtons)
+		if !ok {
+			panic("error accessing mergeModel")
+		}
+		m.mergeButtons = mergeModel
+		cmds = append(cmds, mergeCmd)
+	default:
+		m.list, cmd = m.list.Update(msg)
+	}
 
 	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
