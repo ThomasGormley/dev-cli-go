@@ -112,6 +112,7 @@ const (
 
 type PRStatusResponse struct {
 	CurrentBranch struct {
+		Closed       bool   `json:"closed"`
 		Additions    int    `json:"additions"`
 		BaseRefName  string `json:"baseRefName"`
 		ChangedFiles int    `json:"changedFiles"`
@@ -157,7 +158,7 @@ type StatusCheckRollup struct {
 var jsonFields = []string{
 	"additions", "baseRefName", "changedFiles", "headRefName", "isDraft",
 	"comments", "commits", "files", "mergeStateStatus", "mergeable",
-	"statusCheckRollup", "title", "updatedAt", "url",
+	"statusCheckRollup", "title", "updatedAt", "url", "closed",
 }
 
 func (g *ghClient) PRStatus(identifier string) (PRStatusResponse, error) {
@@ -179,6 +180,9 @@ func (g *ghClient) PRStatus(identifier string) (PRStatusResponse, error) {
 		return PRStatusResponse{}, err
 	}
 
+	if len(resp.CurrentBranch.Commits) == 0 {
+		return PRStatusResponse{}, fmt.Errorf("no pull request available")
+	}
 	return resp, nil
 }
 

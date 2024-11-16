@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -60,10 +59,6 @@ func (m MergeButtons) Init() tea.Cmd {
 	return m.spinner.Tick
 }
 
-func (m MergeButtons) ellipsis(strs ...string) string {
-	return lipgloss.JoinHorizontal(lipgloss.Left, strings.Join(strs, " "), m.spinner.View())
-}
-
 func (m MergeButtons) strategy() gh.MergeStrategy {
 	if !m.selected {
 		return ""
@@ -83,7 +78,7 @@ func (m MergeButtons) strategy() gh.MergeStrategy {
 
 func (m MergeButtons) View() string {
 	if m.cancelling {
-		return m.ellipsis("cancelling merge")
+		return "cancelling merge" + m.spinner.View()
 	}
 	if m.selected {
 		return mergeView(m)
@@ -123,9 +118,9 @@ func mergeView(m MergeButtons) string {
 	if m.merged {
 		return fmt.Sprintf("%s pull request merged", checkMark)
 	}
-	content := m.ellipsis(fmt.Sprintf("merging in %d", m.ticksTilMerge))
+	content := fmt.Sprintf("merging in %d", m.ticksTilMerge) + m.spinner.View()
 	if m.ticksTilMerge == 0 {
-		content = m.ellipsis("merging")
+		content = "merging" + m.spinner.View()
 	}
 	help := SubtleStyle.Render("\nq, esc, ctrl+c: cancel merge")
 	return lipgloss.JoinVertical(

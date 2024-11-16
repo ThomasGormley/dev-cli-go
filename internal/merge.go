@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"os"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,9 +18,12 @@ import (
 
 func handlePRMerge(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		if _, err := tea.LogToFile("/Users/thomas/dev/dev-cli-go/debug.log", "DEBUG"); err != nil {
-			log.Fatal(err)
+		if os.Args[0] == "devd" {
+			if _, err := tea.LogToFile("/Users/thomas/dev/dev-cli-go/debug.log", "DEBUG"); err != nil {
+				log.Fatal(err)
+			}
 		}
+		log.Println(os.Args)
 		identifier := c.Args().First()
 		p := tea.NewProgram(initialModel(identifier, ghCli), tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
@@ -44,6 +48,7 @@ const (
 type handleMergeModel struct {
 	// state
 	loaded bool
+	err    error
 	view   viewMode
 
 	// PR
@@ -81,6 +86,7 @@ func (m handleMergeModel) Init() tea.Cmd {
 		m.spinner.Tick,
 		tui.CheckStatus(m.identifier, m.ghClient),
 		m.statusCheckModel.Init(),
+		m.mergeModel.Init(),
 		// awaitStatusCheckCmd(m.identifier, m.ghClient),
 	)
 }
@@ -98,6 +104,9 @@ func (m handleMergeModel) Init() tea.Cmd {
 var codeHighlight = lipgloss.NewStyle().Foreground(primaryColour).Bold(true).Background(lipgloss.Color(primaryHighlightBg))
 
 func (m handleMergeModel) View() string {
+	if m.err != nil {
+		return docStyle.Render(m.err.Error())
+	}
 	if !m.loaded {
 		return lipgloss.JoinVertical(
 			lipgloss.Center,
@@ -143,6 +152,9 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
+	case tui.CmdError:
+		m.err = msg
+		return m, tea.Sequence(tea.ExitAltScreen, tea.Quit)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height

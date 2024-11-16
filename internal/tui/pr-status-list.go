@@ -104,13 +104,21 @@ type StatusCheckMsg struct {
 	Base             string
 	Head             string
 	IsDraft          bool
+	Closed           bool
 }
 
 func CheckStatus(identifier string, ghCli gh.GitHubClienter) tea.Cmd {
 	return func() tea.Msg {
 		status, err := ghCli.PRStatus(identifier)
 		if err != nil {
-			panic("err checking status")
+			return CmdError{
+				reason: err.Error(),
+			}
+		}
+		if status.CurrentBranch.Closed {
+			return CmdError{
+				reason: "pull request already closed",
+			}
 		}
 		checkItems := make([]list.Item, 0)
 		for _, check := range status.CurrentBranch.StatusCheckRollup {
@@ -130,6 +138,7 @@ func CheckStatus(identifier string, ghCli gh.GitHubClienter) tea.Cmd {
 			Base:             status.CurrentBranch.BaseRefName,
 			Head:             status.CurrentBranch.HeadRefName,
 			IsDraft:          status.CurrentBranch.IsDraft,
+			Closed:           status.CurrentBranch.Closed,
 		}
 	}
 }
