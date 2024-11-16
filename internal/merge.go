@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/urfave/cli/v2"
 )
@@ -65,7 +64,6 @@ type handleMergeModel struct {
 	// bubbles ui
 	spinner       spinner.Model
 	list          list.Model
-	form          *huh.Form
 	width, height int
 }
 
@@ -86,35 +84,11 @@ func initialModel(identifier string, ghCli GitHubClienter) handleMergeModel {
 		return keys.ShortHelp()
 	}
 
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[MergeStrategy]().
-				Key("mergeStrategy").
-				Options(huh.NewOptions(MergeSquash, MergeCommit, MergeRebase)...).
-				Title("Choose your merge strategy"),
-
-			huh.NewConfirm().
-				Key("confirm").
-				Title("Confirm Merge").
-				Validate(func(v bool) error {
-					if !v {
-						return fmt.Errorf("Welp, finish up then")
-					}
-					return nil
-				}).
-				Affirmative("Merge").
-				Negative("Cancel"),
-		).WithWidth(45).
-			WithShowHelp(false).
-			WithShowErrors(false),
-	).WithTheme(huh.ThemeBase())
-
 	return handleMergeModel{
 		suspended:        true,
 		mergeStateStatus: "",
 		spinner:          s,
 		list:             l,
-		form:             form,
 		identifier:       identifier,
 		ghClient:         ghCli,
 	}
@@ -123,7 +97,6 @@ func initialModel(identifier string, ghCli GitHubClienter) handleMergeModel {
 func (m handleMergeModel) Init() tea.Cmd {
 	log.Println("initing")
 	return tea.Batch(
-		m.form.Init(),
 		m.spinner.Tick,
 		awaitStatusCheckCmd(m.identifier, m.ghClient),
 	)
@@ -222,7 +195,7 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.mergeStateStatus {
 		case CLEAN:
-			m.content = fmt.Sprintf("%s All checks have passed\n\n", checkMark) + m.form.View()
+			m.content = fmt.Sprintf("%s All checks have passed\n\n", checkMark)
 			return m, nil
 		case UNSTABLE:
 			m.list.Title = "Some checks were unsuccessful, cannot merge"
@@ -248,22 +221,9 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmds []tea.Cmd
-
-	form, cmd := m.form.Update(msg)
-	if f, ok := form.(*huh.Form); ok {
-		m.form = f
-		cmds = append(cmds, cmd)
-	}
-	if m.form.State == huh.StateCompleted {
-		s := m.form.Get("mergeStrategy")
-		if strat := s.(MergeStrategy); strat != "" {
-			cmds = append(cmds, awaitMerge(strat, m.ghClient))
-		}
-	} else if len(m.form.Errors()) > 0 {
-		return m, tea.Quit
-	}
-
+	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
+
 	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
 }
