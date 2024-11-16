@@ -226,11 +226,11 @@ type mergedMsg struct{}
 
 func merge(strategy gh.MergeStrategy, ghCli gh.GitHubClienter) tea.Cmd {
 	return func() tea.Msg {
-		// err := ghCli.MergePR(strategy)
-		// if err != nil {
-		// 	log.Fatalf("err merging pr: %+v", err)
-		// 	return nil
-		// }
+		err := ghCli.MergePR(strategy)
+		if err != nil {
+			log.Fatalf("err merging pr: %+v", err)
+			return nil
+		}
 		return mergedMsg{}
 	}
 }

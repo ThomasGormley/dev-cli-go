@@ -177,7 +177,6 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loaded = true
 		m.isDraft = msg.IsDraft
 		if msg.MergeStateStatus == gh.CLEAN {
-			log.Println("setting view to mergeSelectionView")
 			m.view = mergeSelectionView
 			cmds = append(cmds, m.mergeModel.Init())
 		}
