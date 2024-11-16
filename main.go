@@ -5,6 +5,7 @@ import (
 	"os"
 
 	cli "github.com/thomasgormley/dev-cli-go/internal"
+	"github.com/thomasgormley/dev-cli-go/internal/gh"
 )
 
 func main() {
@@ -12,7 +13,7 @@ func main() {
 		os.Args,
 		os.Stdout,
 		os.Stderr,
-		cli.NewGitHubClient(os.Stderr, os.Stdout, os.Stdin),
+		gh.NewGitHubClient(os.Stderr, os.Stdout, os.Stdin),
 		nil,
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

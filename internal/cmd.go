@@ -6,11 +6,12 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/thomasgormley/dev-cli-go/internal/gh"
 )
 
 type mergeCmd string
 
-func awaitMerge(strategy MergeStrategy, ghCli GitHubClienter) tea.Cmd {
+func awaitMerge(strategy gh.MergeStrategy, ghCli gh.GitHubClienter) tea.Cmd {
 	return func() tea.Msg {
 		err := ghCli.MergePR(strategy)
 		if err != nil {
@@ -23,13 +24,13 @@ func awaitMerge(strategy MergeStrategy, ghCli GitHubClienter) tea.Cmd {
 
 type statusCheckCmd struct {
 	checks           []list.Item
-	mergeStateStatus MergeStateStatus
+	mergeStateStatus gh.MergeStateStatus
 	title            string
 	base             string
 	head             string
 }
 
-func awaitStatusCheckCmd(identifier string, ghCli GitHubClienter) tea.Cmd {
+func awaitStatusCheckCmd(identifier string, ghCli gh.GitHubClienter) tea.Cmd {
 	return func() tea.Msg {
 		status, err := ghCli.PRStatus(identifier)
 		if err != nil {

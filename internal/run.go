@@ -3,6 +3,7 @@ package cli
 import (
 	"io"
 
+	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/urfave/cli/v2"
 )
 
@@ -12,7 +13,7 @@ func Run(
 	args []string,
 	stdout,
 	stderr io.Writer,
-	ghClient GitHubClienter,
+	ghClient gh.GitHubClienter,
 	exitErrorHandler cli.ExitErrHandlerFunc,
 ) error {
 

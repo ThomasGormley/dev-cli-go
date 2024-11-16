@@ -12,11 +12,12 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/thomasgormley/dev-cli-go/internal/tui"
 	"github.com/urfave/cli/v2"
 )
 
-func handlePRMerge(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFunc {
+func handlePRMerge(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		if _, err := tea.LogToFile("/Users/thomas/dev/dev-cli-go/debug.log", "DEBUG"); err != nil {
 			log.Fatal(err)
@@ -57,11 +58,11 @@ type handleMergeModel struct {
 	title            string
 	base             string
 	head             string
-	mergeStateStatus MergeStateStatus
+	mergeStateStatus gh.MergeStateStatus
 
 	// deps
 	identifier string
-	ghClient   GitHubClienter
+	ghClient   gh.GitHubClienter
 
 	// bubbles ui
 	spinner       spinner.Model
@@ -70,7 +71,7 @@ type handleMergeModel struct {
 	mergeButtons  tea.Model
 }
 
-func initialModel(identifier string, ghCli GitHubClienter) handleMergeModel {
+func initialModel(identifier string, ghCli gh.GitHubClienter) handleMergeModel {
 	s := spinner.New()
 	s.Spinner = spinner.Ellipsis
 	s.Style = lipgloss.NewStyle().Foreground(primaryColour)
@@ -207,10 +208,10 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.mergeStateStatus {
-		case CLEAN:
+		case gh.CLEAN:
 			m.view = "mergeSelection"
 			return m, nil
-		case UNSTABLE:
+		case gh.UNSTABLE:
 			m.list.Title = "Some checks were unsuccessful, cannot merge"
 			return m, tea.Sequence(
 				tea.EnterAltScreen,
