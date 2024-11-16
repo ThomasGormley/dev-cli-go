@@ -15,6 +15,9 @@ var (
 	helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	dot       = lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(" • ")
 	btn       = lipgloss.NewStyle().Foreground(primaryColour)
+	skipped   = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).SetString("■") // Light gray color
+	failure   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).SetString("✗") // Red color
+	unknown   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).SetString("?") // Red color
 )
 
 func NewEllipsisSpinner() spinner.Model {
