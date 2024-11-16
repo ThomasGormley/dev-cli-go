@@ -19,6 +19,11 @@ func NewKeyMap() keyMap {
 	}
 }
 
+var (
+	primaryColour      = lipgloss.Color("#F97415")
+	primaryHighlightBg = lipgloss.Color("#451a03") // Darker shade to allow primary to pop on text
+)
+
 // ShortHelp returns keybindings to be shown in the mini help view. It's part
 // of the key.Map interface.
 func (k keyMap) ShortHelp() []key.Binding {
@@ -40,12 +45,12 @@ func NewDelegate() list.DefaultDelegate {
 	d.Styles.SelectedTitle = lipgloss.NewStyle().
 		Bold(true).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(lipgloss.Color("#F97415")).
-		Foreground(lipgloss.Color("#F97415")).
+		BorderForeground(primaryColour).
+		Foreground(primaryColour).
 		Padding(0, 0, 0, 1)
 
 	d.Styles.SelectedDesc = d.Styles.SelectedTitle.
-		Foreground(lipgloss.Color("#F97415"))
+		Foreground(primaryColour)
 
 	return d
 }

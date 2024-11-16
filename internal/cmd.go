@@ -24,6 +24,9 @@ func awaitMerge(strategy MergeStrategy, ghCli GitHubClienter) tea.Cmd {
 type statusCheckCmd struct {
 	checks           []list.Item
 	mergeStateStatus MergeStateStatus
+	title            string
+	base             string
+	head             string
 }
 
 func awaitStatusCheckCmd(identifier string, ghCli GitHubClienter) tea.Cmd {
@@ -44,8 +47,11 @@ func awaitStatusCheckCmd(identifier string, ghCli GitHubClienter) tea.Cmd {
 			})
 		}
 		return statusCheckCmd{
-			checkItems,
-			status.CurrentBranch.MergeStateStatus,
+			checks:           checkItems,
+			mergeStateStatus: status.CurrentBranch.MergeStateStatus,
+			title:            status.CurrentBranch.Title,
+			base:             status.CurrentBranch.BaseRefName,
+			head:             status.CurrentBranch.HeadRefName,
 		}
 	}
 }

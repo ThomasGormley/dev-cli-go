@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"runtime"
 
@@ -17,8 +18,11 @@ import (
 
 func handlePRMerge(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
+		if _, err := tea.LogToFile("/Users/thomas/dev/dev-cli-go/debug.log", "DEBUG"); err != nil {
+			log.Fatal(err)
+		}
 		identifier := c.Args().First()
-		p := tea.NewProgram(initialModel(identifier, ghCli))
+		p := tea.NewProgram(initialModel(identifier, ghCli), tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
 			return err
 		}
@@ -29,6 +33,7 @@ func handlePRMerge(stdout, stderr io.Writer, ghCli GitHubClienter) cli.ActionFun
 
 var (
 	docStyle  = lipgloss.NewStyle().Margin(1, 2)
+	document  = lipgloss.NewStyle().Margin(1, 2).Align(lipgloss.Left)
 	checkMark = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).SetString("✓")
 	skipped   = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).SetString("■") // Light gray color
 	failure   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).SetString("✗") // Red color
@@ -42,22 +47,32 @@ var keys = keyMap{
 }
 
 type handleMergeModel struct {
-	mergeStateStatus MergeStateStatus
-	merged           bool
-	messages         []string
-	spinner          spinner.Model
-	list             list.Model
-	form             *huh.Form
-	identifier       string
-	ghClient         GitHubClienter
+	// state
+	suspended bool
+	merged    bool
+	content   string
 
+	// PR
+	title            string
+	base             string
+	head             string
+	mergeStateStatus MergeStateStatus
+
+	// deps
+	identifier string
+	ghClient   GitHubClienter
+
+	// bubbles ui
+	spinner       spinner.Model
+	list          list.Model
+	form          *huh.Form
 	width, height int
 }
 
 func initialModel(identifier string, ghCli GitHubClienter) handleMergeModel {
 	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	s.Spinner = spinner.Ellipsis
+	s.Style = lipgloss.NewStyle().Foreground(primaryColour)
 
 	d := NewDelegate()
 
@@ -95,8 +110,8 @@ func initialModel(identifier string, ghCli GitHubClienter) handleMergeModel {
 	).WithTheme(huh.ThemeBase())
 
 	return handleMergeModel{
+		suspended:        true,
 		mergeStateStatus: "",
-		messages:         []string{},
 		spinner:          s,
 		list:             l,
 		form:             form,
@@ -106,6 +121,7 @@ func initialModel(identifier string, ghCli GitHubClienter) handleMergeModel {
 }
 
 func (m handleMergeModel) Init() tea.Cmd {
+	log.Println("initing")
 	return tea.Batch(
 		m.form.Init(),
 		m.spinner.Tick,
@@ -123,30 +139,49 @@ func (m handleMergeModel) Init() tea.Cmd {
 // Merged :tick:
 // --exit--
 
+var codeHighlight = lipgloss.NewStyle().Foreground(primaryColour).Bold(true).Background(lipgloss.Color(primaryHighlightBg))
+
 func (m handleMergeModel) View() string {
-	if len(m.form.Errors()) > 0 {
-		return ""
-	}
-	spin := m.spinner.View() + " "
-	if m.form.State == huh.StateCompleted && !m.merged {
-		return docStyle.Render(spin + "Merging...")
-	} else if m.form.State == huh.StateAborted {
-		return docStyle.Render(spin + "Merging cancelled")
-	}
-	if m.mergeStateStatus != CLEAN && len(m.list.Items()) > 0 {
-		lipgloss.JoinVertical(
-			lipgloss.Left,
-			m.list.View(),
+	if m.suspended {
+		return lipgloss.JoinVertical(
+			lipgloss.Center,
+			document.Render("loading", m.spinner.View()),
 		)
-		return m.list.View()
 	}
-	if m.mergeStateStatus == "" {
-		return docStyle.Render(spin + "Checking CI..." + " press q to quit")
-	}
-	if m.mergeStateStatus == CLEAN && !m.merged {
-		return docStyle.Render(m.form.View())
-	}
-	return ""
+
+	title := docStyle.Render(
+		fmt.Sprintf("# %s\t", m.title),
+		fmt.Sprintf("(%s -> %s)", codeHighlight.Render(m.head), codeHighlight.Render(m.base)),
+	)
+
+	content := docStyle.Render(m.content)
+	// if len(m.form.Errors()) > 0 {
+	// 	return ""
+	// }
+	// spin := m.spinner.View() + " "
+	// if m.form.State == huh.StateCompleted && !m.merged {
+	// 	return docStyle.Render(spin + "Merging...")
+	// } else if m.form.State == huh.StateAborted {
+	// 	return docStyle.Render(spin + "Merging cancelled")
+	// }
+	// if m.mergeStateStatus != CLEAN && len(m.list.Items()) > 0 {
+	// 	lipgloss.JoinVertical(
+	// 		lipgloss.Left,
+	// 		m.list.View(),
+	// 	)
+	// 	return m.list.View()
+	// }
+	// if m.mergeStateStatus == "" {
+	// 	return docStyle.Render(spin + "Checking CI..." + " press q to quit")
+	// }
+	// if m.mergeStateStatus == CLEAN && !m.merged {
+	// 	return docStyle.Render(m.form.View())
+	// }
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		title,
+		content,
+	)
 }
 
 func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -172,17 +207,23 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SetSize((msg.Width-h)/2, msg.Height-v)
 	case statusCheckCmd:
 		m.mergeStateStatus = msg.mergeStateStatus
+		m.base = msg.base
+		m.head = msg.head
+		m.title = msg.title
+		m.suspended = false
+
+		// return m, nil
 
 		if len(msg.checks) == 0 && msg.mergeStateStatus == "" {
 			return m, tea.Sequence(
-				tea.Println("No PR available"),
 				tea.Quit,
 			)
 		}
 
 		switch msg.mergeStateStatus {
 		case CLEAN:
-			return m, tea.Println(docStyle.Render(fmt.Sprintf("%s All checks have passed", checkMark)))
+			m.content = fmt.Sprintf("%s All checks have passed\n\n", checkMark) + m.form.View()
+			return m, nil
 		case UNSTABLE:
 			m.list.Title = "Some checks were unsuccessful, cannot merge"
 			return m, tea.Sequence(
