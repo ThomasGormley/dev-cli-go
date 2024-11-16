@@ -3,8 +3,10 @@ package tui
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
@@ -26,18 +28,17 @@ import (
 
 type MergeButtons struct {
 	focused       int
+	cancelling    bool
 	merged        bool
 	selected      bool
 	options       []string
 	ticksTilMerge int
 
+	// ui
+	spinner spinner.Model
+
 	gh gh.GitHubClienter
 }
-
-var (
-	primaryColour      = lipgloss.Color("#F97415")
-	primaryHighlightBg = lipgloss.Color("#451a03") // Darker shade to allow primary to pop on text
-)
 
 func NewMergeButtons() MergeButtons {
 	return MergeButtons{
@@ -49,12 +50,17 @@ func NewMergeButtons() MergeButtons {
 			"merge",
 			"rebase",
 		},
-		ticksTilMerge: 3,
+		spinner:       NewEllipsisSpinner(),
+		ticksTilMerge: 50,
 	}
 }
 
 func (m MergeButtons) Init() tea.Cmd {
-	return nil
+	return m.spinner.Tick
+}
+
+func (m MergeButtons) ellipsis(strs ...string) string {
+	return lipgloss.JoinHorizontal(lipgloss.Left, strings.Join(strs, " "), m.spinner.View())
 }
 
 func (m MergeButtons) strategy() gh.MergeStrategy {
@@ -74,14 +80,10 @@ func (m MergeButtons) strategy() gh.MergeStrategy {
 	}
 }
 
-var (
-	checkMark = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).SetString("✓")
-	helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	dot       = lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(" • ")
-	btn       = lipgloss.NewStyle().Foreground(primaryColour)
-)
-
 func (m MergeButtons) View() string {
+	if m.cancelling {
+		return m.ellipsis("cancelling merge")
+	}
 	if m.selected {
 		return mergeView(m)
 	}
@@ -120,27 +122,24 @@ func mergeView(m MergeButtons) string {
 	if m.merged {
 		return fmt.Sprintf("%s pull request merged", checkMark)
 	}
-	ticker := fmt.Sprintf("merging in %d...\n", m.ticksTilMerge)
-
+	content := m.ellipsis("merging in", string(m.ticksTilMerge))
 	if m.ticksTilMerge == 0 {
-		ticker = "merging..."
+		content = m.ellipsis("merging")
 	}
-	return ticker
+	return content
 }
 
 func (m MergeButtons) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Make sure these keys always quit
-	if msg, ok := msg.(tea.KeyMsg); ok {
-		k := msg.String()
-		if k == "q" || k == "esc" || k == "ctrl+c" {
-			return m, tea.Quit
-		}
+	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd // Continuously tick the spinner
 	}
 
 	if m.selected {
 		return updateMerge(msg, m)
 	}
-
 	return updateSelect(msg, m)
 }
 
@@ -154,22 +153,34 @@ func tick() tea.Cmd {
 	})
 }
 
+type mergeCancelMsg struct{}
+
+func cancelMerge() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg {
+		// simulate time spent for msg to appear
+		return mergeCancelMsg{}
+	})
+}
+
 func updateMerge(msg tea.Msg, m MergeButtons) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
-			// cancel ticker
+			m.cancelling = true
+			return m, cancelMerge()
 		}
 	case tickMsg:
 		if m.ticksTilMerge == 0 {
-			// return merge
 			return m, merge(m.strategy(), m.gh)
 		}
 		m.ticksTilMerge--
 		return m, tick()
 	case mergedMsg:
 		m.merged = true
+	case mergeCancelMsg:
+		// reset
+		m = NewMergeButtons()
 	}
 
 	return m, nil
@@ -180,6 +191,8 @@ func updateSelect(msg tea.Msg, m MergeButtons) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "q", "esc", "ctrl+c":
+			return m, tea.Quit
 		case "j", "down":
 			m.focused++
 			if m.focused > 3 {
@@ -211,7 +224,7 @@ type mergedMsg struct{}
 
 func merge(strategy gh.MergeStrategy, ghCli gh.GitHubClienter) tea.Cmd {
 	return tea.Tick(time.Second*2, func(time.Time) tea.Msg {
-		log.Println("fake merging with strategy %s", strategy)
+		log.Printf("fake merging with strategy %s\n", strategy)
 		return mergedMsg{}
 	})
 	// return func() tea.Msg {

@@ -47,12 +47,18 @@ var keys = keyMap{
 	),
 }
 
+type viewMode string
+
+const (
+	mergeSelectionView viewMode = "mergeSelection"
+)
+
 type handleMergeModel struct {
 	// state
 	suspended bool
 	merged    bool
 	content   string
-	view      string
+	view      viewMode
 
 	// PR
 	title            string
@@ -91,7 +97,7 @@ func initialModel(identifier string, ghCli gh.GitHubClienter) handleMergeModel {
 	return handleMergeModel{
 		suspended:        true,
 		mergeStateStatus: "",
-		spinner:          s,
+		spinner:          tui.NewEllipsisSpinner(),
 		list:             l,
 		identifier:       identifier,
 		ghClient:         ghCli,
@@ -134,7 +140,7 @@ func (m handleMergeModel) View() string {
 
 	var content string
 	switch m.view {
-	case "mergeSelection":
+	case mergeSelectionView:
 		content = docStyle.Render(m.mergeButtons.View())
 	default:
 		content = docStyle.Render(m.content)
@@ -174,9 +180,9 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
-			return m, tea.Quit
-		}
+		// if msg.String() == "ctrl+c" {
+		// 	return m, tea.Quit
+		// }
 		switch {
 		case key.Matches(msg, keys.Enter):
 			if item, ok := m.list.SelectedItem().(statusCheckItem); ok {
@@ -186,7 +192,7 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd // Continuously tick the spinner
+		cmds = append(cmds, cmd)
 	case tea.WindowSizeMsg:
 		h, v := docStyle.GetFrameSize()
 		m.width = msg.Width
@@ -209,7 +215,7 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.mergeStateStatus {
 		case gh.CLEAN:
-			m.view = "mergeSelection"
+			m.view = mergeSelectionView
 			return m, nil
 		case gh.UNSTABLE:
 			m.list.Title = "Some checks were unsuccessful, cannot merge"
@@ -235,7 +241,7 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.view {
-	case "mergeSelection":
+	case mergeSelectionView:
 		mergeBtns, mergeCmd := m.mergeButtons.Update(msg)
 		mergeModel, ok := mergeBtns.(tui.MergeButtons)
 		if !ok {
