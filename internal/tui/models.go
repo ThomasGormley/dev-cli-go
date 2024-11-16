@@ -26,9 +26,12 @@ type MergeButtons struct {
 	focused  int
 	selected bool
 	options  []string
-
-	style lipgloss.Style
 }
+
+var (
+	primaryColour      = lipgloss.Color("#F97415")
+	primaryHighlightBg = lipgloss.Color("#451a03") // Darker shade to allow primary to pop on text
+)
 
 func NewMergeButtons() MergeButtons {
 	return MergeButtons{
@@ -50,14 +53,24 @@ var (
 	checkMark = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).SetString("✓")
 	helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	dot       = lipgloss.NewStyle().Foreground(lipgloss.Color("236")).Render(" • ")
+	btn       = lipgloss.NewStyle().Foreground(primaryColour)
 )
 
 func (m MergeButtons) View() string {
+	statusMessage := fmt.Sprintf("%s All checks have passed\n\n", checkMark)
+	maxLabelWidth := 0
+	for _, b := range m.options {
+		if len(b) > maxLabelWidth {
+			maxLabelWidth = len(b)
+		}
+	}
 
-	content := fmt.Sprintf("%s All checks have passed\n", checkMark)
+	statusMessage += "choose a merge strategy"
 	var btns string
 	for i, b := range m.options {
-		btns += fmt.Sprintf("%s\n", button(b, m.focused == i))
+		// Pad the label to the max width
+		paddedLabel := fmt.Sprintf("%-*s", maxLabelWidth, b)
+		btns += fmt.Sprintf("%s\n", button(paddedLabel, m.focused == i))
 	}
 
 	help := helpStyle.Render("j/k, up/down: select") + dot +
@@ -65,18 +78,18 @@ func (m MergeButtons) View() string {
 		helpStyle.Render("q, esc: quit")
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		content,
-		lipgloss.JoinHorizontal(lipgloss.Left, btns),
+		statusMessage,
+		btns,
 		help,
 	)
 }
 
 func button(label string, focused bool) string {
 	if focused {
-		return fmt.Sprintf("x [ %s ]", label)
+		return btn.Render(fmt.Sprintf("[ %s ]", label))
 
 	}
-	return fmt.Sprintf("[ %s ]", label)
+	return btn.Render("[ ") + label + btn.Render(" ]")
 }
 
 func (m MergeButtons) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
