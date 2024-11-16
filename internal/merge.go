@@ -23,7 +23,6 @@ func handlePRMerge(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Action
 				log.Fatal(err)
 			}
 		}
-		log.Println(os.Args)
 		identifier := c.Args().First()
 		p := tea.NewProgram(initialModel(identifier, ghCli), tea.WithAltScreen())
 		if _, err := p.Run(); err != nil {
@@ -86,7 +85,6 @@ func (m handleMergeModel) Init() tea.Cmd {
 		m.spinner.Tick,
 		tui.CheckStatus(m.identifier, m.ghClient),
 		m.statusCheckModel.Init(),
-		m.mergeModel.Init(),
 		// awaitStatusCheckCmd(m.identifier, m.ghClient),
 	)
 }
@@ -144,6 +142,7 @@ func (m handleMergeModel) title() string {
 }
 
 func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 
@@ -178,7 +177,9 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loaded = true
 		m.isDraft = msg.IsDraft
 		if msg.MergeStateStatus == gh.CLEAN {
+			log.Println("setting view to mergeSelectionView")
 			m.view = mergeSelectionView
+			cmds = append(cmds, m.mergeModel.Init())
 		}
 	}
 
@@ -202,5 +203,6 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	cmds = append(cmds, cmd)
+
 	return m, tea.Batch(cmds...)
 }
