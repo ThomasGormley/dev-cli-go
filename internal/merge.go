@@ -101,7 +101,7 @@ func initialModel(identifier string, ghCli gh.GitHubClienter) handleMergeModel {
 		list:             l,
 		identifier:       identifier,
 		ghClient:         ghCli,
-		mergeButtons:     tui.NewMergeButtons(),
+		mergeButtons:     tui.NewMergeButtons(ghCli),
 	}
 }
 

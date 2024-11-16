@@ -175,7 +175,7 @@ func (g *ghClient) PRStatus(identifier string) (PRStatusResponse, error) {
 }
 
 func (g *ghClient) MergePR(strategy MergeStrategy) error {
-	args := []string{"pr", "merge", "--delete-branch"}
+	args := []string{"pr", "merge"}
 	switch strategy {
 	case MergeSquash:
 		args = append(args, "--squash")

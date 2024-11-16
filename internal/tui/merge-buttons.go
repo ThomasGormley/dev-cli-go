@@ -40,7 +40,7 @@ type MergeButtons struct {
 	gh gh.GitHubClienter
 }
 
-func NewMergeButtons() MergeButtons {
+func NewMergeButtons(gh gh.GitHubClienter) MergeButtons {
 	return MergeButtons{
 		focused:  0,
 		selected: false,
@@ -51,7 +51,8 @@ func NewMergeButtons() MergeButtons {
 			"rebase",
 		},
 		spinner:       NewEllipsisSpinner(),
-		ticksTilMerge: 50,
+		ticksTilMerge: 2,
+		gh:            gh,
 	}
 }
 
@@ -122,11 +123,16 @@ func mergeView(m MergeButtons) string {
 	if m.merged {
 		return fmt.Sprintf("%s pull request merged", checkMark)
 	}
-	content := m.ellipsis("merging in", string(m.ticksTilMerge))
+	content := m.ellipsis(fmt.Sprintf("merging in %d", m.ticksTilMerge))
 	if m.ticksTilMerge == 0 {
 		content = m.ellipsis("merging")
 	}
-	return content
+	help := helpStyle.Render("\nq, esc, ctrl+c: cancel merge")
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		content,
+		help,
+	)
 }
 
 func (m MergeButtons) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -146,9 +152,7 @@ func (m MergeButtons) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 type tickMsg struct{}
 
 func tick() tea.Cmd {
-	log.Println("calling tick")
 	return tea.Tick(time.Second, func(time.Time) tea.Msg {
-		log.Println("ticking")
 		return tickMsg{}
 	})
 }
@@ -171,6 +175,7 @@ func updateMerge(msg tea.Msg, m MergeButtons) (tea.Model, tea.Cmd) {
 			return m, cancelMerge()
 		}
 	case tickMsg:
+		log.Printf("ticks till merge, %d", m.ticksTilMerge)
 		if m.ticksTilMerge == 0 {
 			return m, merge(m.strategy(), m.gh)
 		}
@@ -178,9 +183,11 @@ func updateMerge(msg tea.Msg, m MergeButtons) (tea.Model, tea.Cmd) {
 		return m, tick()
 	case mergedMsg:
 		m.merged = true
+		return m, tea.Tick(time.Second, func(time.Time) tea.Msg {
+			return tea.Quit()
+		})
 	case mergeCancelMsg:
-		// reset
-		m = NewMergeButtons()
+		m = NewMergeButtons(m.gh)
 	}
 
 	return m, nil
@@ -195,13 +202,13 @@ func updateSelect(msg tea.Msg, m MergeButtons) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "j", "down":
 			m.focused++
-			if m.focused > 3 {
-				m.focused = 3
+			if m.focused >= len(m.options) {
+				m.focused = 0
 			}
 		case "k", "up":
 			m.focused--
 			if m.focused < 0 {
-				m.focused = 0
+				m.focused = len(m.options) - 1
 			}
 		case "enter", "space":
 			m.selected = true
@@ -223,16 +230,12 @@ func button(label string, focused bool) string {
 type mergedMsg struct{}
 
 func merge(strategy gh.MergeStrategy, ghCli gh.GitHubClienter) tea.Cmd {
-	return tea.Tick(time.Second*2, func(time.Time) tea.Msg {
-		log.Printf("fake merging with strategy %s\n", strategy)
+	return func() tea.Msg {
+		err := ghCli.MergePR(strategy)
+		if err != nil {
+			log.Fatalf("err merging pr: %+v", err)
+			return nil
+		}
 		return mergedMsg{}
-	})
-	// return func() tea.Msg {
-	// err := ghgh.MergePR(strategy)
-	// if err != nil {
-	// 	// return err command
-	// 	return nil
-	// }
-	// return mergedMsg{}
-	// }
+	}
 }
