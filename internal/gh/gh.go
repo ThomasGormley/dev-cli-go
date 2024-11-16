@@ -73,20 +73,28 @@ func (g *ghClient) ViewPR(identifier string) error {
 type MergeStateStatus string
 
 const (
+
 	// The head ref is out of date.
 	BEHIND MergeStateStatus = "BEHIND"
+
 	// The merge is blocked.
 	BLOCKED MergeStateStatus = "BLOCKED"
+
 	// Mergeable and passing commit status.
 	CLEAN MergeStateStatus = "CLEAN"
+
 	// The merge commit cannot be cleanly created.
 	DIRTY MergeStateStatus = "DIRTY"
+
 	// The merge is blocked due to the pull request being a draft.
 	DRAFT MergeStateStatus = "DRAFT"
+
 	// Mergeable with passing commit status and pre-receive hooks.
 	HAS_HOOKS MergeStateStatus = "HAS_HOOKS"
+
 	// The state cannot currently be determined.
 	UNKNOWN MergeStateStatus = "UNKNOWN"
+
 	// Mergeable with non-passing commit status.
 	UNSTABLE MergeStateStatus = "UNSTABLE"
 )

@@ -16,16 +16,16 @@ import (
 type PullRequestStatus struct {
 	mergeStateStatus gh.MergeStateStatus
 
-	loaded        bool
-	spinner       spinner.Model
-	identifier    string
-	gh            gh.GitHubClienter
-	list          list.Model
-	width, height int
+	loaded     bool
+	spinner    spinner.Model
+	identifier string
+	gh         gh.GitHubClienter
+	list       list.Model
 }
 
 func NewPullRequestStatus(identifier string, gh gh.GitHubClienter) PullRequestStatus {
 	l := list.New([]list.Item{}, NewDelegate(), 0, 0)
+	l.SetShowTitle(false)
 	return PullRequestStatus{
 		spinner:    NewEllipsisSpinner(),
 		list:       l,
@@ -37,7 +37,7 @@ func NewPullRequestStatus(identifier string, gh gh.GitHubClienter) PullRequestSt
 func (m PullRequestStatus) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
-		checkStatus(m.identifier, m.gh),
+		CheckStatus(m.identifier, m.gh),
 	)
 }
 
@@ -70,15 +70,15 @@ func (m PullRequestStatus) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		log.Printf("setting PR status width %d, height %d", m.width, m.height)
-		m.list.SetSize(msg.Width, msg.Height)
-	case statusCheckMsg:
+		log.Printf("ini height %d, width %d", m.list.Height(), m.list.Width())
+		if m.list.Width() == 0 && m.list.Height() == 0 {
+			m.SetListSize(msg.Width, msg.Height)
+		}
+	case StatusCheckMsg:
 		log.Println("received statusCheckMsg")
 		// nothing to check
 		m.loaded = true
-		if len(msg.checks) == 0 && msg.mergeStateStatus == "" {
+		if len(msg.checks) == 0 && msg.MergeStateStatus == "" {
 			return m, tea.Quit
 		}
 		log.Printf("loaded, setting items")
@@ -91,17 +91,23 @@ func (m PullRequestStatus) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-type statusCheckMsg struct {
-	checks           []list.Item
-	mergeStateStatus gh.MergeStateStatus
-	title            string
-	base             string
-	head             string
+func (m *PullRequestStatus) SetListSize(width int, height int) {
+	log.Printf("Setting List Size Height %d, width %d", height, width)
+
+	m.list.SetSize(width, height)
 }
 
-func checkStatus(identifier string, ghCli gh.GitHubClienter) tea.Cmd {
+type StatusCheckMsg struct {
+	checks           []list.Item
+	MergeStateStatus gh.MergeStateStatus
+	Title            string
+	Base             string
+	Head             string
+	IsDraft          bool
+}
+
+func CheckStatus(identifier string, ghCli gh.GitHubClienter) tea.Cmd {
 	return func() tea.Msg {
-		log.Printf("checking status for identifier %s\n", identifier)
 		status, err := ghCli.PRStatus(identifier)
 		if err != nil {
 			panic("err checking status")
@@ -117,13 +123,13 @@ func checkStatus(identifier string, ghCli gh.GitHubClienter) tea.Cmd {
 				url:        check.DetailsURL,
 			})
 		}
-		log.Printf("returning statusCheckMessage with %d checks", len(checkItems))
-		return statusCheckMsg{
+		return StatusCheckMsg{
 			checks:           checkItems,
-			mergeStateStatus: status.CurrentBranch.MergeStateStatus,
-			title:            status.CurrentBranch.Title,
-			base:             status.CurrentBranch.BaseRefName,
-			head:             status.CurrentBranch.HeadRefName,
+			MergeStateStatus: status.CurrentBranch.MergeStateStatus,
+			Title:            status.CurrentBranch.Title,
+			Base:             status.CurrentBranch.BaseRefName,
+			Head:             status.CurrentBranch.HeadRefName,
+			IsDraft:          status.CurrentBranch.IsDraft,
 		}
 	}
 }

@@ -4,13 +4,12 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os/exec"
-	"runtime"
+	"math"
 
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/thomasgormley/dev-cli-go/internal/tui"
 	"github.com/urfave/cli/v2"
@@ -32,19 +31,8 @@ func handlePRMerge(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Action
 }
 
 var (
-	docStyle  = lipgloss.NewStyle().Margin(1, 2)
-	document  = lipgloss.NewStyle().Margin(1, 2).Align(lipgloss.Left)
-	checkMark = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).SetString("✓")
-	skipped   = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).SetString("■") // Light gray color
-	failure   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).SetString("✗") // Red color
+	docStyle = lipgloss.NewStyle().Margin(1, 2)
 )
-
-var keys = keyMap{
-	Enter: key.NewBinding(
-		key.WithKeys("enter"),
-		key.WithHelp("enter", "open details"),
-	),
-}
 
 type viewMode string
 
@@ -55,16 +43,14 @@ const (
 
 type handleMergeModel struct {
 	// state
-	suspended bool
-	merged    bool
-	content   string
-	view      viewMode
+	loaded bool
+	view   viewMode
 
 	// PR
-	title            string
-	base             string
-	head             string
-	mergeStateStatus gh.MergeStateStatus
+	prTitle string
+	base    string
+	head    string
+	isDraft bool
 
 	// deps
 	identifier string
@@ -74,13 +60,13 @@ type handleMergeModel struct {
 	spinner          spinner.Model
 	width, height    int
 	mergeModel       tea.Model
-	statusCheckModel tea.Model
+	statusCheckModel tui.PullRequestStatus
 }
 
 func initialModel(identifier string, ghCli gh.GitHubClienter) handleMergeModel {
 
 	return handleMergeModel{
-		// suspended:        true,
+		loaded:           false,
 		view:             statusCheckView,
 		spinner:          tui.NewEllipsisSpinner(),
 		identifier:       identifier,
@@ -93,6 +79,7 @@ func initialModel(identifier string, ghCli gh.GitHubClienter) handleMergeModel {
 func (m handleMergeModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
+		tui.CheckStatus(m.identifier, m.ghClient),
 		m.statusCheckModel.Init(),
 		// awaitStatusCheckCmd(m.identifier, m.ghClient),
 	)
@@ -111,17 +98,12 @@ func (m handleMergeModel) Init() tea.Cmd {
 var codeHighlight = lipgloss.NewStyle().Foreground(primaryColour).Bold(true).Background(lipgloss.Color(primaryHighlightBg))
 
 func (m handleMergeModel) View() string {
-	// if m.suspended {
-	// 	return lipgloss.JoinVertical(
-	// 		lipgloss.Center,
-	// 		document.Render("loading", m.spinner.View()),
-	// 	)
-	// }
-
-	title := docStyle.Render(
-		fmt.Sprintf("# %s\t", m.title),
-		fmt.Sprintf("(%s -> %s)", codeHighlight.Render(m.head), codeHighlight.Render(m.base)),
-	)
+	if !m.loaded {
+		return lipgloss.JoinVertical(
+			lipgloss.Center,
+			docStyle.Render("loading", m.spinner.View()),
+		)
+	}
 
 	var content string
 	switch m.view {
@@ -133,8 +115,22 @@ func (m handleMergeModel) View() string {
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		docStyle.Render(title),
+		docStyle.Render(m.title()),
 		docStyle.Render(content),
+	)
+}
+
+const maxWidth = 120
+
+func (m handleMergeModel) title() string {
+	min := int(math.Min(float64(m.width)-float64(docStyle.GetAlignHorizontal()), float64(maxWidth)))
+	title := fmt.Sprintf("# %s\t", m.prTitle) + fmt.Sprintf("(%s -> %s)", codeHighlight.Render(m.head), codeHighlight.Render(m.base))
+	if m.isDraft {
+		title += tui.SubtleStyle.Bold(true).Render("\n\nDRAFT")
+	}
+	return wordwrap.String(
+		title,
+		min,
 	)
 }
 
@@ -150,6 +146,28 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		hMargin, vMargin := docStyle.GetFrameSize()
+		titleHeight := lipgloss.Height(m.title())
+		// Calculate available height for content
+		availableHeight := msg.Height - titleHeight - vMargin - lipgloss.Height(m.statusCheckModel.View())
+		if availableHeight < 0 {
+			availableHeight = 0 // Prevent negative height
+		}
+
+		availableWidth := msg.Width - hMargin
+		if availableWidth < 0 {
+			availableWidth = 0 // Prevent negative widtg
+		}
+		m.statusCheckModel.SetListSize(availableWidth, availableHeight)
+	case tui.StatusCheckMsg:
+		m.prTitle = msg.Title
+		m.base = msg.Base
+		m.head = msg.Head
+		m.loaded = true
+		m.isDraft = msg.IsDraft
+		if msg.MergeStateStatus == gh.CLEAN {
+			m.view = mergeSelectionView
+		}
 	}
 
 	switch m.view {
@@ -173,24 +191,4 @@ func (m handleMergeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	cmds = append(cmds, cmd)
 	return m, tea.Batch(cmds...)
-}
-
-func openBrowser(url string) error {
-	if url == "" {
-		return nil
-	}
-	var cmd *exec.Cmd
-
-	switch runtime.GOOS {
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	default:
-		return fmt.Errorf("unsupported platform")
-	}
-
-	return cmd.Start()
 }

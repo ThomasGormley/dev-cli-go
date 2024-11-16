@@ -108,9 +108,9 @@ func selectView(m MergeButtons) string {
 		btns += fmt.Sprintf("%s\n", button(paddedLabel, m.focused == i))
 	}
 
-	help := helpStyle.Render("j/k, up/down: select") + dot +
-		helpStyle.Render("enter: choose") + dot +
-		helpStyle.Render("q, esc: quit")
+	help := SubtleStyle.Render("j/k, up/down: select") + dot +
+		SubtleStyle.Render("enter: choose") + dot +
+		SubtleStyle.Render("q, esc: quit")
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		statusMessage,
@@ -127,7 +127,7 @@ func mergeView(m MergeButtons) string {
 	if m.ticksTilMerge == 0 {
 		content = m.ellipsis("merging")
 	}
-	help := helpStyle.Render("\nq, esc, ctrl+c: cancel merge")
+	help := SubtleStyle.Render("\nq, esc, ctrl+c: cancel merge")
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		content,
