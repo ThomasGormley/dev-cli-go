@@ -228,8 +228,7 @@ func merge(strategy gh.MergeStrategy, ghCli gh.GitHubClienter) tea.Cmd {
 	return func() tea.Msg {
 		err := ghCli.MergePR(strategy)
 		if err != nil {
-			log.Fatalf("err merging pr: %+v", err)
-			return nil
+			return CmdError{err.Error()}
 		}
 		return mergedMsg{}
 	}
