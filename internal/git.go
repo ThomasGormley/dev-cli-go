@@ -27,11 +27,11 @@ var gitPullRequestTemplatePaths = []string{
 
 const pullRequestTemplateFilename = "PULL_REQUEST_TEMPLATE.md"
 
-func repoPRTemplate() []byte {
+func repoPRTemplate() string {
 	root, err := gitRoot()
 
 	if err != nil {
-		return nil
+		return ""
 	}
 
 	for _, p := range gitPullRequestTemplatePaths {
@@ -39,12 +39,12 @@ func repoPRTemplate() []byte {
 		if _, err := os.Stat(path); err == nil {
 			file, err := os.ReadFile(path)
 			if err != nil {
-				return nil
+				return ""
 			}
-			return file
+			return string(file)
 		}
 	}
-	return nil
+	return ""
 }
 
 func gitRoot() (string, error) {

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"io"
+	"os"
 	"os/exec"
 	"path"
 	"time"
@@ -9,7 +10,7 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-const diaryDir = "/Users/thomas/dev/engineering-diary"
+var diaryDir = path.Join(os.Getenv("HOME"), "dev", "engineering-diary")
 
 func handleDiaryNew(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {

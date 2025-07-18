@@ -3,7 +3,7 @@
 # Define the binary name and installation path
 BINARY_NAME="dev"
 BINARY_LOCATION="bin/$BINARY_NAME"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="$HOME/bin"
 
 # Check if the binary exists
 if [ ! -f "./bin/$BINARY_NAME" ]; then

@@ -2,6 +2,7 @@
 
 # Set the binary name
 BINARY_NAME=dev
+BIN_PATH=./bin/${BINARY_NAME}
 
 # Set default make command
 all: build
@@ -19,7 +20,11 @@ test:
 # Clean up binaries
 clean:
 	@echo "Cleaning up..."
-	rm ${BINARY_NAME}
+	@if [ -f ${BIN_PATH} ]; then rm ${BIN_PATH}; fi
+
+install: clean build
+	@echo "Installing..."
+	./scripts/install.sh
 
 # Run these commands by default when no arguments are provided to make
 .PHONY: all build test clean

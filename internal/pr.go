@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"strings"
 
@@ -55,18 +54,11 @@ func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 }
 
 func bodyOrPRTemplate(c *cli.Context) (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
+	body := c.String("body")
+	if body == "" {
+		body = repoPRTemplate()
 	}
-	if body := c.String("body"); body == "" && isWorkstationDir(cwd) {
-		body, err := firstupPRTemplate()
-		if err != nil {
-			return "", err
-		}
-		c.Set("body", body)
-	}
-	return c.String("body"), nil
+	return body, nil
 }
 
 func titleOrPrompt(c *cli.Context) (string, error) {
@@ -99,9 +91,9 @@ func promptForTitle() (string, error) {
 }
 
 func prTitleFromBranch(branch string) string {
-	// e.g. ABC-123-some-description
+	// e.g. ABC-123-some-description or anystring-ABC-123-some-description
 	// -> ABC-123: Some description
-	re := regexp.MustCompile(`^([A-Z]+-\d+)-(.*)`)
+	re := regexp.MustCompile(`^(?:.*-)?([A-Z]+-\d+)-(.*)`)
 	matches := re.FindStringSubmatch(branch)
 
 	if len(matches) < 3 {
