@@ -12,7 +12,7 @@ import (
 
 type GitHubClienter interface {
 	AuthStatus() error
-	CreatePR(title, body, base string) error
+	CreatePR(title, body, base string, draft bool) error
 	ViewPR(identifier string) error
 	PRStatus(identifier string) (PRStatusResponse, error)
 	MergePR(s MergeStrategy) error
@@ -34,8 +34,12 @@ func (g *ghClient) AuthStatus() error {
 	return err
 }
 
-func (g *ghClient) CreatePR(title, body, base string) error {
-	cmd := g.prepareCmd("gh", "pr", "create", "--title", title, "--body", body, "--base", base)
+func (g *ghClient) CreatePR(title, body, base string, draft bool) error {
+	args := []string{"pr", "create", "--title", title, "--body", body, "--base", base}
+	if draft {
+		args = append(args, "--draft")
+	}
+	cmd := g.prepareCmd("gh", args...)
 	err := cmd.Run()
 	if err != nil {
 		return err

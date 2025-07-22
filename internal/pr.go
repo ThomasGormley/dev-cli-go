@@ -34,11 +34,8 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 		}
 
 		base := c.String("base")
-		if base == "" {
-			stderr.Write([]byte("Base branch is required\n"))
-		}
 
-		if err := ghCli.CreatePR(title, body, base); err != nil {
+		if err := ghCli.CreatePR(title, body, base, c.Bool("draft")); err != nil {
 			return cli.Exit(err, 1)
 		}
 

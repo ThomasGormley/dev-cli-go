@@ -54,7 +54,7 @@ func Run(
 								Name:    "draft",
 								Usage:   "mark the pull request as a draft",
 								Aliases: []string{"d"},
-								Value:   false,
+								Value:   true,
 							},
 						},
 					},
