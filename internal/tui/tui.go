@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/go-github/v74/github"
 	"github.com/thomasgormley/dev-cli-go/internal/tui/components"
+	"github.com/thomasgormley/dev-cli-go/internal/tui/components/diff"
 )
 
 var _ tea.Model = &Model{}
@@ -44,21 +45,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		case "ctrl+b":
+			m.diffViewport.ViewUp()
+		case "ctrl+f":
+			m.diffViewport.ViewDown()
+		case "up":
+			m.diffViewport.LineUp(1)
+		case "down":
+			m.diffViewport.LineDown(1)
 		}
 	case tea.WindowSizeMsg:
 		msg.Height -= 2
 		m.width, m.height = msg.Width, msg.Height
-		m.diffViewport.Width = m.width / 2
-		m.diffViewport.Height = m.height
+		m.diffViewport.Width = m.width - lipgloss.Width(m.commentsList.View())
+		m.diffViewport.Height = m.height - lipgloss.Height(m.renderHeader())
 	case components.CommentsSelectedMsg:
 		m = m.updateDiffViewport(msg.Comment)
 	case error:
 		log.Printf("error: %v", msg)
 	}
 
-	u, cmd := m.commentsList.Update(msg)
-	m.commentsList = u.(components.CommentsList)
+	log.Printf("viewport offset: %d", m.diffViewport.YOffset)
+	updatedCommentsList, cmd := m.commentsList.Update(msg)
+	m.commentsList = updatedCommentsList.(components.CommentsList)
 	cmds = append(cmds, cmd)
+
+	// updatedViewport, cmd := m.diffViewport.Update(msg)
+	// m.diffViewport = updatedViewport
+	// cmds = append(cmds, cmd)
 
 	return m, cmd
 }
@@ -66,11 +80,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateDiffViewport(comment *github.PullRequestComment) Model {
 	if comment != nil {
 		diffHunk := comment.GetDiffHunk()
+		// starts := comment.GetStartLine()
+		// ends := comment.GetLine()
 		if diffHunk == "" {
 			diffHunk = "No diff context available for this comment"
+			// starts = 0
 		}
-		m.diffViewport.SetContent(diffHunk)
+		diff, _ := diff.FormatDiff(
+			comment.GetPath(),
+			diffHunk,
+			diff.WithWidth(m.width-2-lipgloss.Width(m.commentsList.View())),
+		)
+		m.diffViewport.SetContent(diff)
+		// m.diffViewport.SetYOffset(starts)
 	} else {
+		m.diffViewport.SetYOffset(0)
 		m.diffViewport.SetContent("Select a comment to view diff context...")
 	}
 
@@ -110,6 +134,12 @@ func fetchPRComments(ctx context.Context, client *github.Client, id int) tea.Cmd
 		if err != nil {
 			return nil
 		}
+		// b, err := json.MarshalIndent(comments, "", "  ")
+		// if err != nil {
+		// 	log.Println("error marshaling comments to JSON:", err)
+		// } else {
+		// 	log.Println(string(b))
+		// }
 		return components.CommentsUpdatedMsg{Comments: comments}
 	}
 }
