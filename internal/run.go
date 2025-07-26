@@ -2,7 +2,9 @@ package cli
 
 import (
 	"io"
+	"os"
 
+	"github.com/google/go-github/v74/github"
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/urfave/cli/v2"
 )
@@ -16,6 +18,8 @@ func Run(
 	ghClient gh.GitHubClienter,
 	exitErrorHandler cli.ExitErrHandlerFunc,
 ) error {
+
+	ghHttpClient := github.NewClient(nil).WithAuthToken(os.Getenv("GH_TOKEN"))
 
 	app := &cli.App{
 		Name:                 "dev",
@@ -69,6 +73,12 @@ func Run(
 						Usage:   "Merge a pull request",
 						Aliases: []string{"m"},
 						Action:  handlePRMerge(stdout, stderr, ghClient),
+					},
+					{
+						Name:    "review",
+						Usage:   "Review a pull request",
+						Aliases: []string{"r"},
+						Action:  handlePRReview(stdout, stderr, ghHttpClient),
 					},
 				},
 			},

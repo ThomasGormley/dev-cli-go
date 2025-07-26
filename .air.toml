@@ -3,8 +3,8 @@ testdata_dir = "testdata"
 tmp_dir = "tmp"
 
 [build]
-  bin = "./bin/dev-development"  # Path where the binary is built
-  cmd = "go build -o ./bin/dev-development ."  # Build command
+  bin = "./bin/devd"  # Path where the binary is built
+  cmd = "go build -o ./bin/devd ."  # Build command
   delay = 1000
   exclude_dir = ["assets", "tmp", "vendor", "testdata"]
   exclude_regex = ["_test.go"]
