@@ -1,9 +1,7 @@
 package components
 
 import (
-	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"sort"
@@ -124,16 +122,20 @@ func (c CommentsView) View() string {
 	start, end := c.paginator.GetSliceBounds(len(c.commentBlocks))
 	visibleItems := c.commentBlocks[start:end]
 
-	var b strings.Builder
+	var comments strings.Builder
 	for blockIdx, item := range visibleItems {
 		isFocused := c.blockCursor == blockIdx
-		b.WriteString(c.renderComment(item.comment, isFocused) + "\n")
+		comments.WriteString(c.renderComment(item.comment, isFocused) + "\n")
 	}
 
-	b.WriteString(" " + c.paginator.View())
+	comments.WriteString(" " + c.paginator.View())
 	return lipgloss.NewStyle().Height(c.Height).MaxHeight(c.Height).
 		Render(
-			lipgloss.JoinVertical(lipgloss.Left, b.String(), ""),
+			lipgloss.JoinVertical(
+				lipgloss.Left,
+				lipgloss.NewStyle().Width(c.Width/2).MaxWidth(c.Width/2).Render(comments.String()),
+				"",
+			),
 		)
 }
 
@@ -239,7 +241,14 @@ func (c CommentsView) openInEditor() tea.Cmd {
 			return err
 		}
 		repoRootPath := strings.TrimSpace(string(repoRoot))
-		fullPath := fmt.Sprintf("%s/%s:%d", repoRootPath, comment.GetPath(), comment.GetStartLine())
+		var lineNum int
+
+		if isMultiline := comment.StartLine != nil; isMultiline {
+			lineNum = comment.GetOriginalStartLine()
+		} else {
+			lineNum = comment.GetOriginalLine()
+		}
+		fullPath := fmt.Sprintf("%s/%s:%d", repoRootPath, comment.GetPath(), lineNum)
 		cmd := exec.Command(parts[0], append(parts[1:], fullPath)...)
 		return cmd.Run()
 	}
@@ -283,11 +292,6 @@ func (c CommentsView) emitSelectionChange() tea.Cmd {
 }
 
 func (c CommentsView) renderComment(comment *github.PullRequestComment, isFocused bool) string {
-	cursor := ""
-	if isFocused {
-		cursor = "▶ "
-	}
-
 	username := comment.GetUser().GetLogin()
 	timestamp := comment.GetCreatedAt().Format("Jan 2, 15:04")
 
@@ -295,15 +299,6 @@ func (c CommentsView) renderComment(comment *github.PullRequestComment, isFocuse
 	var onLines string
 	isMultiline := comment.StartLine != nil
 	if !isMultiline {
-		if isFocused {
-
-			b, err := json.MarshalIndent(comment, "", "  ")
-			if err != nil {
-				log.Print("error marshaling comment:", err)
-			} else {
-				log.Print(string(b))
-			}
-		}
 		// Single line comment
 		side := "+"
 		sideStyle := addedSideStyle
@@ -343,22 +338,20 @@ func (c CommentsView) renderComment(comment *github.PullRequestComment, isFocuse
 	dot := dotStyle.Render(" • ")
 	styledTimestamp := timestampStyle.Render(timestamp)
 
-	var headerLine string
-	headerLine = fmt.Sprintf("%s%s%s%s",
-		cursor,
+	headerLine := fmt.Sprintf(
+		"%s%s%s",
 		styledUsername,
 		dot,
-		styledTimestamp)
+		styledTimestamp,
+	)
 
 	onLine := commentBodyStyle.Render(onLines + "\n")
 	bodyLine := commentBodyStyle.Render(body)
 
-	if isFocused {
-		bodyLine = "  " + bodyLine
-		onLine = "  " + onLine
-	}
-
 	result := headerLine + "\n" + onLine + "\n" + bodyLine
+	if isFocused {
+		result = lipgloss.NewStyle().Width(c.Width/2).Border(lipgloss.RoundedBorder(), true, false).Render(result)
+	}
 
 	return wordwrap.String(result, c.Width)
 }
