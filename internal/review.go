@@ -3,7 +3,6 @@ package cli
 import (
 	"io"
 	"log"
-	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/go-github/v74/github"
@@ -13,10 +12,8 @@ import (
 
 func handlePRReview(stdout, stderr io.Writer, ghClient *github.Client) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		if os.Args[0] == "devd" {
-			if _, err := tea.LogToFile("/Users/thomasgormley/dev/dev-cli-go/debug.log", "DEBUG"); err != nil {
-				log.Fatal(err)
-			}
+		if _, err := tea.LogToFile("/Users/thomasgormley/dev/dev-cli-go/debug.log", "DEBUG"); err != nil {
+			log.Fatal(err)
 		}
 		// identifier := c.Args().First()
 		p := tea.NewProgram(

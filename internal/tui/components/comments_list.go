@@ -1,25 +1,32 @@
 package components
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/paginator"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/google/go-github/v74/github"
+	"github.com/muesli/reflow/wordwrap"
 	"github.com/thomasgormley/dev-cli-go/internal/tui/theme"
 )
 
 var _ tea.Model = &CommentsView{}
 
 type CommentsView struct {
-	width, height int
+	Width, Height int
 	blockCursor   int
 	commentBlocks []commentBlock
-	focused       bool
+
+	paginator       paginator.Model
+	repliesViewport viewport.Model
 }
 
 type commentBlock struct {
@@ -67,7 +74,9 @@ var (
 func NewCommentsList() CommentsView {
 	return CommentsView{
 		commentBlocks: []commentBlock{},
-		focused:       true,
+
+		paginator:       paginator.New(),
+		repliesViewport: viewport.New(0, 0),
 	}
 }
 
@@ -76,12 +85,9 @@ func (c CommentsView) Init() tea.Cmd {
 }
 
 func (c CommentsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if !c.focused {
-			return c, nil
-		}
-
 		switch msg.String() {
 		case "up", "k":
 			c = c.navigateUp()
@@ -92,17 +98,43 @@ func (c CommentsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "o":
 			return c, c.openInEditor()
 		}
-	case tea.WindowSizeMsg:
-		c.width, c.height = msg.Width, msg.Height
+	// case tea.WindowSizeMsg:
+	// c.Width, c.Height = msg.Width, msg.Height/2
 	case CommentsUpdatedMsg:
 		c = c.buildCommentTree(msg.Comments)
+		perPage := 3
+		totalPages := (len(c.commentBlocks) + perPage - 1) / perPage
+		c.paginator = paginator.New(
+			paginator.WithPerPage(perPage),
+			paginator.WithTotalPages(totalPages),
+		)
+		c = c.ensureCursorBounds()
 		return c, c.emitSelectionChange()
 	}
-	return c, nil
+
+	c.paginator, cmd = c.paginator.Update(msg)
+	return c, cmd
 }
 
-func (c CommentsView) IsFocused() bool {
-	return c.focused
+func (c CommentsView) View() string {
+	if len(c.commentBlocks) == 0 {
+		return "No comments to display"
+	}
+
+	start, end := c.paginator.GetSliceBounds(len(c.commentBlocks))
+	visibleItems := c.commentBlocks[start:end]
+
+	var b strings.Builder
+	for blockIdx, item := range visibleItems {
+		isFocused := c.blockCursor == blockIdx
+		b.WriteString(c.renderComment(item.comment, isFocused) + "\n")
+	}
+
+	b.WriteString(" " + c.paginator.View())
+	return lipgloss.NewStyle().Height(c.Height).MaxHeight(c.Height).
+		Render(
+			lipgloss.JoinVertical(lipgloss.Left, b.String(), ""),
+		)
 }
 
 func (c CommentsView) buildCommentTree(comments []*github.PullRequestComment) CommentsView {
@@ -140,24 +172,55 @@ func (c CommentsView) buildCommentTree(comments []*github.PullRequestComment) Co
 		c.commentBlocks = append(c.commentBlocks, block)
 	}
 
-	// Reset cursor position
+	// Reset cursor position and ensure bounds
 	c.blockCursor = 0
+	c = c.ensureCursorBounds()
+
+	return c
+}
+
+// ensureCursorBounds ensures the cursor is within valid bounds for the current page
+func (c CommentsView) ensureCursorBounds() CommentsView {
+	if len(c.commentBlocks) == 0 {
+		c.blockCursor = 0
+		return c
+	}
+
+	start, end := c.paginator.GetSliceBounds(len(c.commentBlocks))
+	visibleItems := end - start
+
+	if visibleItems == 0 {
+		c.blockCursor = 0
+		return c
+	}
+
+	maxCursor := visibleItems - 1
+	if c.blockCursor > maxCursor {
+		c.blockCursor = maxCursor
+	}
+	if c.blockCursor < 0 {
+		c.blockCursor = 0
+	}
 
 	return c
 }
 
 func (c CommentsView) navigateUp() CommentsView {
-	if c.blockCursor == 0 {
-		return c // Already at the top
-	}
-
-	// Move to previous block
 	if c.blockCursor > 0 {
+		// Move up within current page
 		c.blockCursor--
-		// Position at the last reply of the previous block, or main comment if no replies
+	} else if c.paginator.Page > 0 {
+		// Move to previous page and position at last item
+		c.paginator.PrevPage()
+		start, end := c.paginator.GetSliceBounds(len(c.commentBlocks))
+		visibleItems := end - start
+		if visibleItems > 0 {
+			c.blockCursor = visibleItems - 1
+		}
 	}
+	// If at first item of first page, do nothing
 
-	return c
+	return c.ensureCursorBounds()
 }
 
 func (c CommentsView) openInEditor() tea.Cmd {
@@ -183,25 +246,31 @@ func (c CommentsView) openInEditor() tea.Cmd {
 }
 
 func (c CommentsView) navigateDown() CommentsView {
-	if c.blockCursor >= len(c.commentBlocks) {
-		return c
-	}
+	start, end := c.paginator.GetSliceBounds(len(c.commentBlocks))
+	visibleItems := end - start
 
-	// Move to next block
-	if c.blockCursor < len(c.commentBlocks)-1 {
+	if c.blockCursor < visibleItems-1 {
+		// Move down within current page
 		c.blockCursor++
+	} else if c.paginator.Page < c.paginator.TotalPages-1 {
+		// Move to next page and position at first item
+		c.paginator.NextPage()
+		c.blockCursor = 0
 	}
+	// If at last item of last page, do nothing
 
-	return c
+	return c.ensureCursorBounds()
 }
 
 func (c CommentsView) GetCurrentComment() *github.PullRequestComment {
-	if c.blockCursor >= len(c.commentBlocks) {
+	start, end := c.paginator.GetSliceBounds(len(c.commentBlocks))
+	visibleItems := end - start
+
+	if c.blockCursor >= visibleItems || start+c.blockCursor >= len(c.commentBlocks) {
 		return nil
 	}
 
-	block := c.commentBlocks[c.blockCursor]
-
+	block := c.commentBlocks[start+c.blockCursor]
 	return block.comment
 }
 
@@ -224,7 +293,17 @@ func (c CommentsView) renderComment(comment *github.PullRequestComment, isFocuse
 
 	// Format line numbers with side indicators (only for parent comments)
 	var onLines string
-	if comment.GetStartLine() == comment.GetLine() {
+	isMultiline := comment.StartLine != nil
+	if !isMultiline {
+		if isFocused {
+
+			b, err := json.MarshalIndent(comment, "", "  ")
+			if err != nil {
+				log.Print("error marshaling comment:", err)
+			} else {
+				log.Print(string(b))
+			}
+		}
 		// Single line comment
 		side := "+"
 		sideStyle := addedSideStyle
@@ -232,7 +311,7 @@ func (c CommentsView) renderComment(comment *github.PullRequestComment, isFocuse
 			side = "-"
 			sideStyle = removedSideStyle
 		}
-		onLines = fmt.Sprintf("on line %s%d", sideStyle.Render(side), comment.GetStartLine())
+		onLines = fmt.Sprintf("on line %s%d", sideStyle.Render(side), comment.GetOriginalLine())
 	} else {
 		// Multi-line comment
 		startSide := "+"
@@ -250,8 +329,8 @@ func (c CommentsView) renderComment(comment *github.PullRequestComment, isFocuse
 		}
 
 		onLines = fmt.Sprintf("on lines %s%d to %s%d",
-			startSideStyle.Render(startSide), comment.GetStartLine(),
-			endSideStyle.Render(endSide), comment.GetLine())
+			startSideStyle.Render(startSide), comment.GetOriginalStartLine(),
+			endSideStyle.Render(endSide), comment.GetOriginalLine())
 	}
 	body := strings.TrimSpace(comment.GetBody())
 
@@ -281,26 +360,7 @@ func (c CommentsView) renderComment(comment *github.PullRequestComment, isFocuse
 
 	result := headerLine + "\n" + onLine + "\n" + bodyLine
 
-	return result
-}
-
-func (c CommentsView) View() string {
-	if len(c.commentBlocks) == 0 {
-		return "No comments to display"
-	}
-
-	var commentViews []string
-
-	for blockIdx, block := range c.commentBlocks {
-		// Render main comment
-		isFocused := c.blockCursor == blockIdx
-		commentViews = append(commentViews, c.renderComment(block.comment, isFocused))
-	}
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		lipgloss.NewStyle().MarginBottom(3).Render(strings.Join(commentViews, "\n\n")),
-	)
+	return wordwrap.String(result, c.Width)
 }
 
 func (c CommentsView) GetStats() (total, topLevel, replies int) {

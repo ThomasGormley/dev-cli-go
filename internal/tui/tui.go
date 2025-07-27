@@ -2,8 +2,10 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os/exec"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,7 +18,7 @@ import (
 var _ tea.Model = &Model{}
 
 func NewModel(ghClient *github.Client) tea.Model {
-	vp := viewport.New(50, 20)
+	vp := viewport.New(0, 0)
 	vp.SetContent("Select a comment to view details...")
 	return &Model{
 		github:       ghClient,
@@ -55,17 +57,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// 	m.diffViewport.LineDown(1)
 		}
 	case tea.WindowSizeMsg:
-		msg.Height -= 2
 		m.width, m.height = msg.Width, msg.Height
-		m.diffViewport.Width = m.width - lipgloss.Width(m.commentsList.View())
-		m.diffViewport.Height = m.height - lipgloss.Height(m.renderHeader())
+
+		// Calculate header height
+		headerHeight := lipgloss.Height(m.renderHeader())
+
+		// Available height for content after header
+		contentHeight := m.height - headerHeight
+
+		// Split remaining height between components
+		m.commentsList.Width = m.width
+		m.commentsList.Height = contentHeight / 2
+		m.diffViewport.Width = m.width
+		m.diffViewport.Height = contentHeight / 2
 	case components.CommentsSelectedMsg:
 		m = m.updateDiffViewport(msg.Comment)
 	case error:
 		log.Printf("error: %v", msg)
 	}
 
-	log.Printf("viewport offset: %d", m.diffViewport.YOffset)
 	updatedCommentsList, cmd := m.commentsList.Update(msg)
 	m.commentsList = updatedCommentsList.(components.CommentsView)
 	cmds = append(cmds, cmd)
@@ -78,9 +88,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateDiffViewport(comment *github.PullRequestComment) Model {
+	m.diffViewport.SetContent("")
+
 	if comment != nil {
 		diffHunk := comment.GetDiffHunk()
-		starts := comment.GetStartLine()
+		var starts int
+		isMultiline := comment.StartLine != nil
+		if isMultiline {
+			starts = comment.GetOriginalStartLine()
+		} else {
+			starts = comment.GetOriginalLine()
+		}
 		// ends := comment.GetLine()
 		if diffHunk == "" {
 			diffHunk = "No diff context available for this comment"
@@ -89,7 +107,7 @@ func (m Model) updateDiffViewport(comment *github.PullRequestComment) Model {
 		diff, _ := diff.FormatDiff(
 			comment.GetPath(),
 			diffHunk,
-			diff.WithWidth(m.width-2-lipgloss.Width(m.commentsList.View())),
+			diff.WithWidth(m.width),
 		)
 		m.diffViewport.SetContent(diff)
 		m.diffViewport.SetYOffset(starts - 1)
@@ -101,45 +119,58 @@ func (m Model) updateDiffViewport(comment *github.PullRequestComment) Model {
 	return m
 }
 
-var (
-	docStyle = lipgloss.NewStyle().Margin(1, 2)
-)
-
 func (m Model) View() string {
 	// Add header with comment count and help text
 	header := m.renderHeader()
 
-	// Calculate available height for content
-	contentHeight := m.height - lipgloss.Height(header) - 12
-
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
-		lipgloss.PlaceVertical(
-			contentHeight,
-			lipgloss.Left,
-			lipgloss.JoinHorizontal(
-				lipgloss.Left,
-				docStyle.Render(m.commentsList.View()),
-				docStyle.Render(m.diffViewport.View()),
-			),
-		),
+		m.commentsList.View(),
+		m.diffViewport.View(),
 	)
 }
 
-func fetchPRComments(ctx context.Context, client *github.Client, id int) tea.Cmd {
+func fetchPRComments(ctx context.Context, client *github.Client, _ int) tea.Cmd {
+	type ghPRView struct {
+		Number         int `json:"number"`
+		HeadRepository struct {
+			Name string `json:"name"`
+		} `json:"headRepository"`
+		HeadRepositoryOwner struct {
+			Login string `json:"login"`
+		} `json:"headRepositoryOwner"`
+	}
 	return func() tea.Msg {
-		log.Println("Fetching PR comments")
-		comments, _, err := client.PullRequests.ListComments(ctx, "thomasgormley", "dev-cli-go", id, nil)
+		log.Println("Fetching current PR number and repo info from gh CLI")
+		// Get the current PR number using the gh CLI
+		cmd := exec.Command("gh", "pr", "view", "--json", "number,headRepository,headRepositoryOwner")
+		out, err := cmd.Output()
+		log.Printf("out: %s", string(out))
 		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				log.Printf("gh CLI stderr: %s", string(exitErr.Stderr))
+			}
+			log.Printf("error running gh CLI: %v", err)
 			return nil
 		}
-		// b, err := json.MarshalIndent(comments, "", "  ")
-		// if err != nil {
-		// 	log.Println("error marshaling comments to JSON:", err)
-		// } else {
-		// 	log.Println(string(b))
-		// }
+
+		// Parse the JSON output
+
+		var prInfo ghPRView
+		if err := json.Unmarshal(out, &prInfo); err != nil {
+			log.Printf("error parsing PR info JSON: %v", err)
+			return nil
+		}
+
+		prNumber := prInfo.Number
+		owner := prInfo.HeadRepositoryOwner.Login
+		repo := prInfo.HeadRepository.Name
+
+		comments, _, err := client.PullRequests.ListComments(ctx, owner, repo, prNumber, nil)
+		if err != nil {
+			return err
+		}
 		return components.CommentsUpdatedMsg{Comments: comments}
 	}
 }
