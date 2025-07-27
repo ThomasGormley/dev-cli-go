@@ -6,13 +6,14 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/google/go-github/v74/github"
+	"github.com/thomasgormley/dev-cli-go/internal/tui/theme"
 )
 
-var _ tea.Model = &CommentsList{}
+var _ tea.Model = &CommentsView{}
 
-type CommentsList struct {
+type CommentsView struct {
 	width, height int
 	blockCursor   int
 	replyCursor   int
@@ -53,20 +54,27 @@ var (
 
 	dotStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#666666"))
+
+	// Side indicator styles for diff lines
+	addedSideStyle = lipgloss.NewStyle().
+			Foreground(theme.CurrentTheme().DiffAdded())
+
+	removedSideStyle = lipgloss.NewStyle().
+				Foreground(theme.CurrentTheme().DiffRemoved())
 )
 
-func NewCommentsList() CommentsList {
-	return CommentsList{
+func NewCommentsList() CommentsView {
+	return CommentsView{
 		commentBlocks: []commentBlock{},
 		focused:       true,
 	}
 }
 
-func (c CommentsList) Init() tea.Cmd {
+func (c CommentsView) Init() tea.Cmd {
 	return nil
 }
 
-func (c CommentsList) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (c CommentsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if !c.focused {
@@ -90,15 +98,15 @@ func (c CommentsList) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return c, nil
 }
 
-func (c CommentsList) SetFocus(focused bool) {
+func (c CommentsView) SetFocus(focused bool) {
 	c.focused = focused
 }
 
-func (c CommentsList) IsFocused() bool {
+func (c CommentsView) IsFocused() bool {
 	return c.focused
 }
 
-func (c CommentsList) buildCommentTree(comments []*github.PullRequestComment) CommentsList {
+func (c CommentsView) buildCommentTree(comments []*github.PullRequestComment) CommentsView {
 	// Separate top-level comments from replies
 	var topLevel []*github.PullRequestComment
 	repliesMap := make(map[int64][]*github.PullRequestComment)
@@ -140,7 +148,7 @@ func (c CommentsList) buildCommentTree(comments []*github.PullRequestComment) Co
 	return c
 }
 
-func (c CommentsList) navigateUp() CommentsList {
+func (c CommentsView) navigateUp() CommentsView {
 	if c.blockCursor == 0 && c.replyCursor == 0 {
 		return c // Already at the top
 	}
@@ -163,7 +171,7 @@ func (c CommentsList) navigateUp() CommentsList {
 	return c
 }
 
-func (c CommentsList) navigateDown() CommentsList {
+func (c CommentsView) navigateDown() CommentsView {
 	if c.blockCursor >= len(c.commentBlocks) {
 		return c
 	}
@@ -183,7 +191,7 @@ func (c CommentsList) navigateDown() CommentsList {
 	return c
 }
 
-func (c CommentsList) GetCurrentComment() *github.PullRequestComment {
+func (c CommentsView) GetCurrentComment() *github.PullRequestComment {
 	if c.blockCursor >= len(c.commentBlocks) {
 		return nil
 	}
@@ -198,7 +206,7 @@ func (c CommentsList) GetCurrentComment() *github.PullRequestComment {
 	return nil
 }
 
-func (c CommentsList) emitSelectionChange() tea.Cmd {
+func (c CommentsView) emitSelectionChange() tea.Cmd {
 	return func() tea.Msg {
 		return CommentsSelectedMsg{
 			Comment: c.GetCurrentComment(),
@@ -206,7 +214,7 @@ func (c CommentsList) emitSelectionChange() tea.Cmd {
 	}
 }
 
-func (c CommentsList) renderComment(comment *github.PullRequestComment, isSelected bool, isReply bool) string {
+func (c CommentsView) renderComment(comment *github.PullRequestComment, isSelected bool, isReply bool) string {
 	cursor := " "
 	if isSelected {
 		cursor = "▶"
@@ -214,6 +222,48 @@ func (c CommentsList) renderComment(comment *github.PullRequestComment, isSelect
 
 	username := comment.GetUser().GetLogin()
 	timestamp := comment.GetCreatedAt().Format("Jan 2, 15:04")
+
+	// Format line numbers with side indicators (only for parent comments)
+	var onLines string
+	if !isReply {
+		if comment.GetStartLine() == comment.GetLine() {
+			// Single line comment
+			side := "+"
+			sideStyle := addedSideStyle
+			if comment.GetStartSide() == "LEFT" {
+				side = "-"
+				sideStyle = removedSideStyle
+			}
+			if isSelected {
+				sideStyle = sideStyle.Background(selectedStyle.GetBackground())
+			}
+			onLines = fmt.Sprintf("on line %s%d", sideStyle.Render(side), comment.GetStartLine())
+		} else {
+			// Multi-line comment
+			startSide := "+"
+			startSideStyle := addedSideStyle
+			if comment.GetStartSide() == "LEFT" {
+				startSide = "-"
+				startSideStyle = removedSideStyle
+			}
+
+			endSide := "+"
+			endSideStyle := addedSideStyle
+			if comment.GetSide() == "LEFT" {
+				endSide = "-"
+				endSideStyle = removedSideStyle
+			}
+
+			if isSelected {
+				startSideStyle = startSideStyle.Background(selectedStyle.GetBackground())
+				endSideStyle = endSideStyle.Background(selectedStyle.GetBackground())
+			}
+
+			onLines = fmt.Sprintf("on lines %s%d to %s%d",
+				startSideStyle.Render(startSide), comment.GetStartLine(),
+				endSideStyle.Render(endSide), comment.GetLine())
+		}
+	}
 	body := strings.TrimSpace(comment.GetBody())
 
 	if body == "" {
@@ -224,11 +274,21 @@ func (c CommentsList) renderComment(comment *github.PullRequestComment, isSelect
 	styledUsername := usernameStyle.Render(fmt.Sprintf("[%s]", username))
 	dot := dotStyle.Render(" • ")
 	styledTimestamp := timestampStyle.Render(timestamp)
-	headerLine := fmt.Sprintf("%s %s%s%s",
-		cursor,
-		styledUsername,
-		dot,
-		styledTimestamp)
+
+	var headerLine string
+	if !isReply {
+		headerLine = fmt.Sprintf("%s %s%s%s\n%s",
+			cursor,
+			styledUsername,
+			dot,
+			styledTimestamp, onLines)
+	} else {
+		headerLine = fmt.Sprintf("%s %s%s%s",
+			cursor,
+			styledUsername,
+			dot,
+			styledTimestamp)
+	}
 
 	// Format comment body
 	styledBody := commentBodyStyle.Render(body)
@@ -251,7 +311,7 @@ func (c CommentsList) renderComment(comment *github.PullRequestComment, isSelect
 	return result
 }
 
-func (c CommentsList) View() string {
+func (c CommentsView) View() string {
 	if len(c.commentBlocks) == 0 {
 		return "No comments to display"
 	}
@@ -278,7 +338,7 @@ func (c CommentsList) View() string {
 	return commentsList
 }
 
-func (c CommentsList) GetStats() (total, topLevel, replies int) {
+func (c CommentsView) GetStats() (total, topLevel, replies int) {
 	topLevel = len(c.commentBlocks)
 	replies = 0
 

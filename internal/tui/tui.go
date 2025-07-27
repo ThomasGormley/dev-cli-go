@@ -30,7 +30,7 @@ type Model struct {
 	github        *github.Client
 
 	diffViewport viewport.Model
-	commentsList components.CommentsList
+	commentsList components.CommentsView
 }
 
 func (m Model) Init() tea.Cmd {
@@ -49,10 +49,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.diffViewport.ViewUp()
 		case "ctrl+f":
 			m.diffViewport.ViewDown()
-		case "up":
-			m.diffViewport.LineUp(1)
-		case "down":
-			m.diffViewport.LineDown(1)
+			// case "up":
+			// 	m.diffViewport.LineUp(1)
+			// case "down":
+			// 	m.diffViewport.LineDown(1)
 		}
 	case tea.WindowSizeMsg:
 		msg.Height -= 2
@@ -67,7 +67,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	log.Printf("viewport offset: %d", m.diffViewport.YOffset)
 	updatedCommentsList, cmd := m.commentsList.Update(msg)
-	m.commentsList = updatedCommentsList.(components.CommentsList)
+	m.commentsList = updatedCommentsList.(components.CommentsView)
 	cmds = append(cmds, cmd)
 
 	// updatedViewport, cmd := m.diffViewport.Update(msg)
@@ -80,11 +80,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) updateDiffViewport(comment *github.PullRequestComment) Model {
 	if comment != nil {
 		diffHunk := comment.GetDiffHunk()
-		// starts := comment.GetStartLine()
+		starts := comment.GetStartLine()
 		// ends := comment.GetLine()
 		if diffHunk == "" {
 			diffHunk = "No diff context available for this comment"
-			// starts = 0
+			starts = 0
 		}
 		diff, _ := diff.FormatDiff(
 			comment.GetPath(),
@@ -92,7 +92,7 @@ func (m Model) updateDiffViewport(comment *github.PullRequestComment) Model {
 			diff.WithWidth(m.width-2-lipgloss.Width(m.commentsList.View())),
 		)
 		m.diffViewport.SetContent(diff)
-		// m.diffViewport.SetYOffset(starts)
+		m.diffViewport.SetYOffset(starts - 1)
 	} else {
 		m.diffViewport.SetYOffset(0)
 		m.diffViewport.SetContent("Select a comment to view diff context...")
