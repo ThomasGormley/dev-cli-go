@@ -68,8 +68,13 @@ var (
 	removedSideStyle = lipgloss.NewStyle().
 				Foreground(theme.CurrentTheme().DiffRemoved())
 
+	widthDivider = 3
 	commentsList = func(w int) lipgloss.Style {
-		return lipgloss.NewStyle().Width(w / 3).MaxWidth(w / 3)
+		return lipgloss.NewStyle().Width(w / widthDivider).MaxWidth(w / widthDivider)
+	}
+	threadList = func(w int) lipgloss.Style {
+		rest := w - (w / widthDivider)
+		return lipgloss.NewStyle().Width(rest).MaxWidth(rest)
 	}
 )
 
@@ -136,12 +141,12 @@ func (c CommentsView) View() string {
 		Height(c.Height).
 		MaxHeight(c.Height)
 	list := commentsList(c.Width)
-
+	thread := threadList(c.Width)
 	return content.Render(
-		lipgloss.JoinVertical(
+		lipgloss.JoinHorizontal(
 			lipgloss.Left,
 			list.Render(comments.String()),
-			"",
+			thread.Render(c.GetCurrentComment().GetBody()),
 		),
 	)
 }
@@ -227,7 +232,7 @@ func (c CommentsView) navigateDown() CommentsView {
 		// Move down within current page
 		c.blockCursor++
 	} else if c.paginator.Page < c.paginator.TotalPages-1 {
-		// Move to next page and position at first item
+		// Move to next page and position at firs t item
 		c.paginator.NextPage()
 		c.blockCursor = 0
 	}
@@ -295,6 +300,17 @@ func (c CommentsView) renderComment(comment *github.PullRequestComment, isFocuse
 	body := strings.TrimSpace(comment.GetBody())
 	if body == "" {
 		body = "(empty comment)"
+	} else {
+		maxWidth := commentsList(c.Width).GetMaxWidth()
+		if len(body) > maxWidth {
+			if maxWidth > 3 {
+				body = body[:maxWidth-3] + "..."
+			} else if maxWidth > 0 {
+				body = body[:maxWidth]
+			} else {
+				body = "..."
+			}
+		}
 	}
 
 	headerLine := fmt.Sprintf(
