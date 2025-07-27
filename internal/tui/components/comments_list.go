@@ -2,6 +2,8 @@ package components
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"sort"
 	"strings"
 
@@ -16,7 +18,6 @@ var _ tea.Model = &CommentsView{}
 type CommentsView struct {
 	width, height int
 	blockCursor   int
-	replyCursor   int
 	commentBlocks []commentBlock
 	focused       bool
 }
@@ -88,6 +89,8 @@ func (c CommentsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			c = c.navigateDown()
 			return c, c.emitSelectionChange()
+		case "o":
+			return c, c.openInEditor()
 		}
 	case tea.WindowSizeMsg:
 		c.width, c.height = msg.Width, msg.Height
@@ -96,10 +99,6 @@ func (c CommentsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return c, c.emitSelectionChange()
 	}
 	return c, nil
-}
-
-func (c CommentsView) SetFocus(focused bool) {
-	c.focused = focused
 }
 
 func (c CommentsView) IsFocused() bool {
@@ -143,32 +142,44 @@ func (c CommentsView) buildCommentTree(comments []*github.PullRequestComment) Co
 
 	// Reset cursor position
 	c.blockCursor = 0
-	c.replyCursor = 0
 
 	return c
 }
 
 func (c CommentsView) navigateUp() CommentsView {
-	if c.blockCursor == 0 && c.replyCursor == 0 {
+	if c.blockCursor == 0 {
 		return c // Already at the top
 	}
 
-	if c.replyCursor > 0 {
-		c.replyCursor--
-	} else {
-		// Move to previous block
-		if c.blockCursor > 0 {
-			c.blockCursor--
-			// Position at the last reply of the previous block, or main comment if no replies
-			if len(c.commentBlocks[c.blockCursor].replies) > 0 {
-				c.replyCursor = len(c.commentBlocks[c.blockCursor].replies)
-			} else {
-				c.replyCursor = 0
-			}
-		}
+	// Move to previous block
+	if c.blockCursor > 0 {
+		c.blockCursor--
+		// Position at the last reply of the previous block, or main comment if no replies
 	}
 
 	return c
+}
+
+func (c CommentsView) openInEditor() tea.Cmd {
+	return func() tea.Msg {
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			return nil
+		}
+		parts := strings.Fields(editor)
+		comment := c.GetCurrentComment()
+		if comment == nil {
+			return nil
+		}
+		repoRoot, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+		if err != nil {
+			return err
+		}
+		repoRootPath := strings.TrimSpace(string(repoRoot))
+		fullPath := fmt.Sprintf("%s/%s:%d", repoRootPath, comment.GetPath(), comment.GetStartLine())
+		cmd := exec.Command(parts[0], append(parts[1:], fullPath)...)
+		return cmd.Run()
+	}
 }
 
 func (c CommentsView) navigateDown() CommentsView {
@@ -176,16 +187,9 @@ func (c CommentsView) navigateDown() CommentsView {
 		return c
 	}
 
-	maxReplies := len(c.commentBlocks[c.blockCursor].replies)
-
-	if c.replyCursor < maxReplies {
-		c.replyCursor++
-	} else {
-		// Move to next block
-		if c.blockCursor < len(c.commentBlocks)-1 {
-			c.blockCursor++
-			c.replyCursor = 0
-		}
+	// Move to next block
+	if c.blockCursor < len(c.commentBlocks)-1 {
+		c.blockCursor++
 	}
 
 	return c
@@ -197,13 +201,8 @@ func (c CommentsView) GetCurrentComment() *github.PullRequestComment {
 	}
 
 	block := c.commentBlocks[c.blockCursor]
-	if c.replyCursor == 0 {
-		return block.comment
-	} else if c.replyCursor <= len(block.replies) {
-		return block.replies[c.replyCursor-1]
-	}
 
-	return nil
+	return block.comment
 }
 
 func (c CommentsView) emitSelectionChange() tea.Cmd {
@@ -214,10 +213,10 @@ func (c CommentsView) emitSelectionChange() tea.Cmd {
 	}
 }
 
-func (c CommentsView) renderComment(comment *github.PullRequestComment, isSelected bool, isReply bool) string {
-	cursor := " "
-	if isSelected {
-		cursor = "▶"
+func (c CommentsView) renderComment(comment *github.PullRequestComment, isFocused bool) string {
+	cursor := ""
+	if isFocused {
+		cursor = "▶ "
 	}
 
 	username := comment.GetUser().GetLogin()
@@ -225,44 +224,34 @@ func (c CommentsView) renderComment(comment *github.PullRequestComment, isSelect
 
 	// Format line numbers with side indicators (only for parent comments)
 	var onLines string
-	if !isReply {
-		if comment.GetStartLine() == comment.GetLine() {
-			// Single line comment
-			side := "+"
-			sideStyle := addedSideStyle
-			if comment.GetStartSide() == "LEFT" {
-				side = "-"
-				sideStyle = removedSideStyle
-			}
-			if isSelected {
-				sideStyle = sideStyle.Background(selectedStyle.GetBackground())
-			}
-			onLines = fmt.Sprintf("on line %s%d", sideStyle.Render(side), comment.GetStartLine())
-		} else {
-			// Multi-line comment
-			startSide := "+"
-			startSideStyle := addedSideStyle
-			if comment.GetStartSide() == "LEFT" {
-				startSide = "-"
-				startSideStyle = removedSideStyle
-			}
-
-			endSide := "+"
-			endSideStyle := addedSideStyle
-			if comment.GetSide() == "LEFT" {
-				endSide = "-"
-				endSideStyle = removedSideStyle
-			}
-
-			if isSelected {
-				startSideStyle = startSideStyle.Background(selectedStyle.GetBackground())
-				endSideStyle = endSideStyle.Background(selectedStyle.GetBackground())
-			}
-
-			onLines = fmt.Sprintf("on lines %s%d to %s%d",
-				startSideStyle.Render(startSide), comment.GetStartLine(),
-				endSideStyle.Render(endSide), comment.GetLine())
+	if comment.GetStartLine() == comment.GetLine() {
+		// Single line comment
+		side := "+"
+		sideStyle := addedSideStyle
+		if comment.GetStartSide() == "LEFT" {
+			side = "-"
+			sideStyle = removedSideStyle
 		}
+		onLines = fmt.Sprintf("on line %s%d", sideStyle.Render(side), comment.GetStartLine())
+	} else {
+		// Multi-line comment
+		startSide := "+"
+		startSideStyle := addedSideStyle
+		if comment.GetStartSide() == "LEFT" {
+			startSide = "-"
+			startSideStyle = removedSideStyle
+		}
+
+		endSide := "+"
+		endSideStyle := addedSideStyle
+		if comment.GetSide() == "LEFT" {
+			endSide = "-"
+			endSideStyle = removedSideStyle
+		}
+
+		onLines = fmt.Sprintf("on lines %s%d to %s%d",
+			startSideStyle.Render(startSide), comment.GetStartLine(),
+			endSideStyle.Render(endSide), comment.GetLine())
 	}
 	body := strings.TrimSpace(comment.GetBody())
 
@@ -276,37 +265,21 @@ func (c CommentsView) renderComment(comment *github.PullRequestComment, isSelect
 	styledTimestamp := timestampStyle.Render(timestamp)
 
 	var headerLine string
-	if !isReply {
-		headerLine = fmt.Sprintf("%s %s%s%s\n%s",
-			cursor,
-			styledUsername,
-			dot,
-			styledTimestamp, onLines)
-	} else {
-		headerLine = fmt.Sprintf("%s %s%s%s",
-			cursor,
-			styledUsername,
-			dot,
-			styledTimestamp)
+	headerLine = fmt.Sprintf("%s%s%s%s",
+		cursor,
+		styledUsername,
+		dot,
+		styledTimestamp)
+
+	onLine := commentBodyStyle.Render(onLines + "\n")
+	bodyLine := commentBodyStyle.Render(body)
+
+	if isFocused {
+		bodyLine = "  " + bodyLine
+		onLine = "  " + onLine
 	}
 
-	// Format comment body
-	styledBody := commentBodyStyle.Render(body)
-	bodyLine := styledBody
-
-	// Apply selection styling if this is the current item
-	if isSelected {
-		headerLine = selectedStyle.Render(headerLine)
-		bodyLine = selectedStyle.Render(bodyLine)
-	}
-
-	result := headerLine + "\n" + bodyLine + "\n\n"
-
-	// Apply padding for replies
-	if isReply {
-		replyStyle := lipgloss.NewStyle()
-		result = replyStyle.Render(result)
-	}
+	result := headerLine + "\n" + onLine + "\n" + bodyLine
 
 	return result
 }
@@ -316,26 +289,18 @@ func (c CommentsView) View() string {
 		return "No comments to display"
 	}
 
-	var commentsList string
+	var commentViews []string
 
 	for blockIdx, block := range c.commentBlocks {
 		// Render main comment
-		isSelected := c.blockCursor == blockIdx && c.replyCursor == 0
-		commentsList += c.renderComment(block.comment, isSelected, false)
-
-		// Render replies
-		for replyIdx, reply := range block.replies {
-			isSelected := c.blockCursor == blockIdx && c.replyCursor == replyIdx+1
-			commentsList += c.renderComment(reply, isSelected, true)
-		}
-
-		// Add spacing between comment blocks
-		if blockIdx < len(c.commentBlocks)-1 {
-			commentsList += "\n"
-		}
+		isFocused := c.blockCursor == blockIdx
+		commentViews = append(commentViews, c.renderComment(block.comment, isFocused))
 	}
 
-	return commentsList
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		lipgloss.NewStyle().MarginBottom(3).Render(strings.Join(commentViews, "\n\n")),
+	)
 }
 
 func (c CommentsView) GetStats() (total, topLevel, replies int) {
