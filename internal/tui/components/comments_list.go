@@ -37,8 +37,8 @@ type CommentsSelectedMsg struct {
 	Comment *github.PullRequestComment
 }
 
-// CommentsUpdatedMsg is used to update the comments list
-type CommentsUpdatedMsg struct {
+// CommentsDataMsg is used to update the comments list
+type CommentsDataMsg struct {
 	Comments []*github.PullRequestComment
 }
 
@@ -67,6 +67,10 @@ var (
 
 	removedSideStyle = lipgloss.NewStyle().
 				Foreground(theme.CurrentTheme().DiffRemoved())
+
+	commentsList = func(w int) lipgloss.Style {
+		return lipgloss.NewStyle().Width(w / 3).MaxWidth(w / 3)
+	}
 )
 
 func NewCommentsList() CommentsView {
@@ -89,25 +93,24 @@ func (c CommentsView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "up", "k":
 			c = c.navigateUp()
-			return c, c.emitSelectionChange()
+			return c, selectedCommentMsg(c.GetCurrentComment())
 		case "down", "j":
 			c = c.navigateDown()
-			return c, c.emitSelectionChange()
+			return c, selectedCommentMsg(c.GetCurrentComment())
 		case "o":
 			return c, c.openInEditor()
 		}
-	// case tea.WindowSizeMsg:
-	// c.Width, c.Height = msg.Width, msg.Height/2
-	case CommentsUpdatedMsg:
-		c = c.buildCommentTree(msg.Comments)
-		perPage := 3
+	case CommentsDataMsg:
+		c.commentBlocks = buildCommentBlocks(msg.Comments)
+		c.blockCursor = 0
+		perPage := 3 // TODO calculate?
 		totalPages := (len(c.commentBlocks) + perPage - 1) / perPage
 		c.paginator = paginator.New(
 			paginator.WithPerPage(perPage),
 			paginator.WithTotalPages(totalPages),
 		)
 		c = c.ensureCursorBounds()
-		return c, c.emitSelectionChange()
+		return c, selectedCommentMsg(c.GetCurrentComment())
 	}
 
 	c.paginator, cmd = c.paginator.Update(msg)
@@ -127,58 +130,20 @@ func (c CommentsView) View() string {
 		isFocused := c.blockCursor == blockIdx
 		comments.WriteString(c.renderComment(item.comment, isFocused) + "\n")
 	}
-
 	comments.WriteString(" " + c.paginator.View())
-	return lipgloss.NewStyle().Height(c.Height).MaxHeight(c.Height).
-		Render(
-			lipgloss.JoinVertical(
-				lipgloss.Left,
-				lipgloss.NewStyle().Width(c.Width/2).MaxWidth(c.Width/2).Render(comments.String()),
-				"",
-			),
-		)
-}
 
-func (c CommentsView) buildCommentTree(comments []*github.PullRequestComment) CommentsView {
-	// Separate top-level comments from replies
-	var topLevel []*github.PullRequestComment
-	repliesMap := make(map[int64][]*github.PullRequestComment)
+	content := lipgloss.NewStyle().
+		Height(c.Height).
+		MaxHeight(c.Height)
+	list := commentsList(c.Width)
 
-	for _, comment := range comments {
-		if parentID := comment.GetInReplyTo(); parentID > 0 {
-			repliesMap[parentID] = append(repliesMap[parentID], comment)
-		} else {
-			topLevel = append(topLevel, comment)
-		}
-	}
-
-	// Sort top-level comments by creation time
-	sort.Slice(topLevel, func(i, j int) bool {
-		return topLevel[i].GetCreatedAt().Before(topLevel[j].GetCreatedAt().Time)
-	})
-
-	// Sort replies for each parent by creation time
-	for parentID := range repliesMap {
-		sort.Slice(repliesMap[parentID], func(i, j int) bool {
-			return repliesMap[parentID][i].GetCreatedAt().Before(repliesMap[parentID][j].GetCreatedAt().Time)
-		})
-	}
-
-	// Build comment blocks
-	c.commentBlocks = nil
-	for _, comment := range topLevel {
-		block := commentBlock{
-			comment: comment,
-			replies: repliesMap[comment.GetID()],
-		}
-		c.commentBlocks = append(c.commentBlocks, block)
-	}
-
-	// Reset cursor position and ensure bounds
-	c.blockCursor = 0
-	c = c.ensureCursorBounds()
-
-	return c
+	return content.Render(
+		lipgloss.JoinVertical(
+			lipgloss.Left,
+			list.Render(comments.String()),
+			"",
+		),
+	)
 }
 
 // ensureCursorBounds ensures the cursor is within valid bounds for the current page
@@ -283,10 +248,10 @@ func (c CommentsView) GetCurrentComment() *github.PullRequestComment {
 	return block.comment
 }
 
-func (c CommentsView) emitSelectionChange() tea.Cmd {
+func selectedCommentMsg(selected *github.PullRequestComment) tea.Cmd {
 	return func() tea.Msg {
 		return CommentsSelectedMsg{
-			Comment: c.GetCurrentComment(),
+			Comment: selected,
 		}
 	}
 }
@@ -328,32 +293,28 @@ func (c CommentsView) renderComment(comment *github.PullRequestComment, isFocuse
 			endSideStyle.Render(endSide), comment.GetOriginalLine())
 	}
 	body := strings.TrimSpace(comment.GetBody())
-
 	if body == "" {
 		body = "(empty comment)"
 	}
 
-	// Format header line: [Username] • Timestamp
-	styledUsername := usernameStyle.Render(fmt.Sprintf("[%s]", username))
-	dot := dotStyle.Render(" • ")
-	styledTimestamp := timestampStyle.Render(timestamp)
-
 	headerLine := fmt.Sprintf(
-		"%s%s%s",
-		styledUsername,
-		dot,
-		styledTimestamp,
+		"%s%s%s%s%s",
+		usernameStyle.Render(fmt.Sprintf("[%s]", username)),
+		dotStyle.Render(" • "),
+		commentBodyStyle.Render(onLines),
+		dotStyle.Render(" • "),
+		timestampStyle.Render(timestamp),
 	)
-
-	onLine := commentBodyStyle.Render(onLines + "\n")
 	bodyLine := commentBodyStyle.Render(body)
 
-	result := headerLine + "\n" + onLine + "\n" + bodyLine
+	border := lipgloss.HiddenBorder()
 	if isFocused {
-		result = lipgloss.NewStyle().Width(c.Width/2).Border(lipgloss.RoundedBorder(), true, false).Render(result)
+		border = lipgloss.RoundedBorder()
 	}
+	itemStyle := commentsList(c.Width).Border(border, true, false)
 
-	return wordwrap.String(result, c.Width)
+	content := headerLine + "\n" + bodyLine
+	return wordwrap.String(itemStyle.Render(content), c.Width)
 }
 
 func (c CommentsView) GetStats() (total, topLevel, replies int) {
@@ -366,4 +327,42 @@ func (c CommentsView) GetStats() (total, topLevel, replies int) {
 
 	total = topLevel + replies
 	return
+}
+
+func buildCommentBlocks(comments []*github.PullRequestComment) []commentBlock {
+	// Separate top-level comments from replies
+	var topLevel []*github.PullRequestComment
+	repliesMap := make(map[int64][]*github.PullRequestComment)
+
+	for _, comment := range comments {
+		if parentID := comment.GetInReplyTo(); parentID > 0 {
+			repliesMap[parentID] = append(repliesMap[parentID], comment)
+		} else {
+			topLevel = append(topLevel, comment)
+		}
+	}
+
+	// Sort top-level comments by creation time
+	sort.Slice(topLevel, func(i, j int) bool {
+		return topLevel[i].GetCreatedAt().Before(topLevel[j].GetCreatedAt().Time)
+	})
+
+	// Sort replies for each parent by creation time
+	for parentID := range repliesMap {
+		sort.Slice(repliesMap[parentID], func(i, j int) bool {
+			return repliesMap[parentID][i].GetCreatedAt().Before(repliesMap[parentID][j].GetCreatedAt().Time)
+		})
+	}
+
+	// Build comment blocks
+	commentBlocks := make([]commentBlock, 0)
+	for _, comment := range topLevel {
+		block := commentBlock{
+			comment: comment,
+			replies: repliesMap[comment.GetID()],
+		}
+		commentBlocks = append(commentBlocks, block)
+	}
+
+	return commentBlocks
 }

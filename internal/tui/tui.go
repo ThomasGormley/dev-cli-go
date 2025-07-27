@@ -171,7 +171,7 @@ func fetchPRComments(ctx context.Context, client *github.Client, _ int) tea.Cmd 
 		if err != nil {
 			return err
 		}
-		return components.CommentsUpdatedMsg{Comments: comments}
+		return components.CommentsDataMsg{Comments: comments}
 	}
 }
 
