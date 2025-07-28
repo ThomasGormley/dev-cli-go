@@ -12,6 +12,7 @@ func TestPrTitleFromBranch(t *testing.T) {
 		{"ABC-123", ""},
 		{"invalid-branch", ""},
 		{"ABC-123-some", "ABC-123: some"},
+		{"abc-123-some", "ABC-123: some"},
 	}
 	for _, test := range tests {
 		result := prTitleFromBranch(test.input)

@@ -90,14 +90,14 @@ func promptForTitle() (string, error) {
 func prTitleFromBranch(branch string) string {
 	// e.g. ABC-123-some-description or anystring-ABC-123-some-description
 	// -> ABC-123: Some description
-	re := regexp.MustCompile(`^(?:[a-zA-Z0-9]+-)?([A-Z]+-\d+)-([a-z0-9-]+)$`)
+	re := regexp.MustCompile(`^(?:[a-zA-Z0-9]+-)?([a-zA-Z]+-\d+)-([a-z0-9-]+)$`)
 	matches := re.FindStringSubmatch(branch)
 
 	if len(matches) < 3 {
 		return ""
 	}
 
-	t, d := matches[1], matches[2]
+	t, d := strings.ToUpper(matches[1]), matches[2]
 	d = strings.ReplaceAll(d, "-", " ")
 	if t == "" {
 		return d
