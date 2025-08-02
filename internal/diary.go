@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path"
 	"time"
 
+	"github.com/thomasgormley/dev-cli-go/internal/diary"
+	"github.com/thomasgormley/dev-cli-go/internal/editor"
 	"github.com/urfave/cli/v2"
 )
 
@@ -14,10 +18,7 @@ var diaryDir = path.Join(os.Getenv("HOME"), "dev", "engineering-diary")
 
 func handleDiaryNew(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		today := time.Now()
-		stdout.Write([]byte("Creating a new diary entry for " + today.Format(time.DateOnly) + "...\n"))
-		err := prepareCmd(nil, stdout, stderr, path.Join(diaryDir, "scripts", "new-entry.sh")).Run()
-		if err != nil {
+		if err := diary.Create(); err != nil {
 			return cli.Exit(err, 1)
 		}
 
@@ -28,9 +29,57 @@ func handleDiaryNew(stdout, stderr io.Writer) cli.ActionFunc {
 func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		today := time.Now()
-		stdout.Write([]byte("Opening today's diary entry, " + today.Format(time.DateOnly) + "...\n"))
-		err := prepareCmd(nil, stdout, stderr, path.Join(diaryDir, "scripts", "open.sh")).Run()
+		// stdout.Write([]byte("Opening today's diary entry, " + today.Format(time.DateOnly) + "...\n"))
+		// err := prepareCmd(nil, stdout, stderr, path.Join(diaryDir, "scripts", "open.sh")).Run()
+		// if err != nil {
+		// 	return cli.Exit(err, 1)
+		// }
+
+		editorPath, editorArgs, ok := editor.Lookup()
+		if !ok {
+			return cli.Exit("$EDITOR not set, can't open diary entry", 1)
+		}
+
+		diaryRepo, ok := diary.RepoPath()
+		if !ok {
+			return cli.Exit("Diary repo path not found", 1)
+		}
+
+		entryPath, err := diary.EnsureEntryExists(today)
 		if err != nil {
+			return cli.Exit(err, 1)
+		}
+
+		// Check how many lines the entryPath file is
+		file, err := os.Open(entryPath)
+		if err != nil {
+			return cli.Exit(err, 1)
+		}
+		defer file.Close()
+
+		lineCount, err := lineCounter(file)
+
+		if lineCount <= 3 {
+			entryPath = entryPath + fmt.Sprintf(":%d:1", lineCount)
+		}
+
+		// open the repository first...
+		cmd := exec.CommandContext(c.Context, editorPath, append(editorArgs, diaryRepo)...)
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
+		cmd.Stdin = os.Stdin
+
+		if err := cmd.Start(); err != nil {
+			return cli.Exit(err, 1)
+		}
+
+		// then the file
+		cmd = exec.CommandContext(c.Context, editorPath, append(editorArgs, entryPath)...)
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
+		cmd.Stdin = os.Stdin
+
+		if err := cmd.Start(); err != nil {
 			return cli.Exit(err, 1)
 		}
 
@@ -57,4 +106,23 @@ func prepareCmd(stdin io.Reader, stdout, stderr io.Writer, name string, args ...
 	cmd.Stderr = stderr
 
 	return cmd
+}
+
+func lineCounter(r io.Reader) (int, error) {
+	buf := make([]byte, 32*1024)
+	count := 0
+	lineSep := []byte{'\n'}
+
+	for {
+		c, err := r.Read(buf)
+		count += bytes.Count(buf[:c], lineSep)
+
+		switch {
+		case err == io.EOF:
+			return count, nil
+
+		case err != nil:
+			return count, err
+		}
+	}
 }
