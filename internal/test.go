@@ -33,114 +33,134 @@ func handleTest(stdout, stderr io.Writer) cli.ActionFunc {
 		env:    os.Environ(),
 	}
 	return func(ctx *cli.Context) error {
-
-		shouldRunAll := ctx.Bool("all")
-		shouldRunFailedOnly := ctx.Bool("failed")
-
-		if shouldRunAll {
+		if ctx.Bool("all") {
 			return goTest.run(ctx.Context, "./...")
 		}
 
-		if shouldRunFailedOnly {
-			failedTests, err := goTest.readFailedTests()
-			if err != nil {
-				return fmt.Errorf("failed to read failed tests: %w", err)
-			}
-
-			if len(failedTests) == 0 {
-				fmt.Fprintf(stdout, "No previously failed tests found\n")
-				return nil
-			}
-
-			fmt.Fprintf(stdout, "Running %d previously failed tests...\n", len(failedTests))
-
-			testPattern := buildRunPattern(failedTests...)
-			return goTest.run(ctx.Context, "./...", "-run", testPattern)
+		if ctx.Bool("failed") {
+			return runFailedTests(ctx, goTest, stdout)
 		}
 
-		tests, err := ListTestsFromProject()
+		selectedTest, err := promptForTest()
 		if err != nil {
 			return err
 		}
 
-		var testOptions []string
-		testLookup := make(map[string]TestInfo)
+		return runSelectedTest(ctx, goTest, selectedTest)
+	}
+}
 
-		// Group tests by package
-		packageTests := make(map[string][]TestInfo)
-		for _, test := range tests {
-			pkg := strings.TrimPrefix(strings.TrimSuffix(test.PackagePath, "/..."), "./")
-			packageTests[pkg] = append(packageTests[pkg], test)
-		}
+func runFailedTests(ctx *cli.Context, goTest goTest, stdout io.Writer) error {
+	failedTests, err := goTest.readFailedTests()
+	if err != nil {
+		return fmt.Errorf("failed to read failed tests: %w", err)
+	}
 
-		// Sort packages for consistent ordering
-		var packages []string
-		for pkg := range packageTests {
-			packages = append(packages, pkg)
-		}
-		for i := 0; i < len(packages); i++ {
-			for j := i + 1; j < len(packages); j++ {
-				if packages[i] > packages[j] {
-					packages[i], packages[j] = packages[j], packages[i]
-				}
+	if len(failedTests) == 0 {
+		fmt.Fprintf(stdout, "No previously failed tests found\n")
+		return nil
+	}
+
+	fmt.Fprintf(stdout, "Running %d previously failed tests...\n", len(failedTests))
+	testPattern := buildRunPattern(failedTests...)
+	return goTest.run(ctx.Context, "./...", "-run", testPattern)
+}
+
+func promptForTest() (TestInfo, error) {
+	tests, err := ListTestsFromProject()
+	if err != nil {
+		return TestInfo{}, err
+	}
+
+	testOptions, testLookup := buildTestOptions(tests)
+
+	var testName string
+	prompt := &survey.Select{
+		Message:  "Choose a test:",
+		Options:  testOptions,
+		Filter:   contains,
+		PageSize: 16,
+	}
+
+	if err := survey.AskOne(prompt, &testName); err != nil {
+		return TestInfo{}, err
+	}
+
+	selectedTest, exists := testLookup[testName]
+	if !exists {
+		return TestInfo{}, fmt.Errorf("selected test %s not found in lookup", testName)
+	}
+
+	return selectedTest, nil
+}
+
+func buildTestOptions(tests []TestInfo) ([]string, map[string]TestInfo) {
+	packageTests := groupTestsByPackage(tests)
+	packages := sortedPackageNames(packageTests)
+
+	var testOptions []string
+	testLookup := make(map[string]TestInfo)
+
+	for _, pkg := range packages {
+		testsInPackage := packageTests[pkg]
+
+		// Add package-level option if there are multiple tests
+		if len(testsInPackage) > 1 {
+			packageOption := fmt.Sprintf("📦 %s (all %d tests)", pkg, len(testsInPackage))
+			testOptions = append(testOptions, packageOption)
+			testLookup[packageOption] = TestInfo{
+				Name:        "",
+				PackagePath: "./" + pkg + "/...",
+				FileName:    "",
+				IsPackage:   true,
 			}
 		}
 
-		// Group package options with their individual tests
-		for _, pkg := range packages {
-			testsInPackage := packageTests[pkg]
-
-			// Add package-level option if there are multiple tests
-			if len(testsInPackage) > 1 {
-				packageOption := fmt.Sprintf("📦 %s (all %d tests)", pkg, len(testsInPackage))
-				testOptions = append(testOptions, packageOption)
-				testLookup[packageOption] = TestInfo{
-					Name:        "",
-					PackagePath: "./" + pkg + "/...",
-					FileName:    "",
-					IsPackage:   true,
-				}
-			}
-
-			// Add individual test options for this package
-			for _, test := range testsInPackage {
-				uniqueName := fmt.Sprintf("  🧪 %s", test.Name)
-				testOptions = append(testOptions, uniqueName)
-				testLookup[uniqueName] = test
-			}
-		}
-
-		var testName string
-		// configure it for a specific prompt
-		prompt := &survey.Select{
-			Message:  "Choose a test:",
-			Options:  testOptions,
-			Filter:   contains,
-			PageSize: 16,
-		}
-
-		// or define a default for all of the questions
-		if err := survey.AskOne(prompt, &testName); err != nil {
-			return err
-		}
-
-		// Get the package path for the selected test
-		selectedTest, exists := testLookup[testName]
-		if !exists {
-			return fmt.Errorf("selected test %s not found in lookup", testName)
-		}
-
-		packagePath := selectedTest.PackagePath
-
-		if selectedTest.IsPackage {
-			// Run all tests in the package
-			return goTest.run(ctx.Context, packagePath)
-		} else {
-			// Run specific test
-			runPattern := buildRunPattern(selectedTest.Name)
-			return goTest.run(ctx.Context, packagePath, "-run", runPattern)
+		// Add individual test options for this package
+		for _, test := range testsInPackage {
+			uniqueName := fmt.Sprintf("\t🧪%s", test.Name)
+			testOptions = append(testOptions, uniqueName)
+			testLookup[uniqueName] = test
 		}
 	}
+
+	return testOptions, testLookup
+}
+
+func groupTestsByPackage(tests []TestInfo) map[string][]TestInfo {
+	packageTests := make(map[string][]TestInfo)
+	for _, test := range tests {
+		pkg := strings.TrimPrefix(strings.TrimSuffix(test.PackagePath, "/..."), "./")
+		packageTests[pkg] = append(packageTests[pkg], test)
+	}
+	return packageTests
+}
+
+func sortedPackageNames(packageTests map[string][]TestInfo) []string {
+	var packages []string
+	for pkg := range packageTests {
+		packages = append(packages, pkg)
+	}
+
+	// Simple bubble sort for consistency
+	for i := 0; i < len(packages); i++ {
+		for j := i + 1; j < len(packages); j++ {
+			if packages[i] > packages[j] {
+				packages[i], packages[j] = packages[j], packages[i]
+			}
+		}
+	}
+
+	return packages
+}
+
+func runSelectedTest(ctx *cli.Context, goTest goTest, selectedTest TestInfo) error {
+	if selectedTest.IsPackage {
+		return goTest.run(ctx.Context, selectedTest.PackagePath)
+	}
+
+	runPattern := buildRunPattern(selectedTest.Name)
+	return goTest.run(ctx.Context, selectedTest.PackagePath, "-run", runPattern)
 }
 
 func contains(filterValue string, optValue string, optIndex int) bool {
@@ -247,6 +267,7 @@ func (gt goTest) run(ctx context.Context, path string, args ...string) error {
 	multiWriter := io.MultiWriter(gt.stdout, &capturedOutput)
 	cmd.Stdout = multiWriter
 
+	fmt.Fprintf(gt.stdout, "💨 %s\n", strings.Join(cmd.Args, " "))
 	err := cmd.Run()
 
 	// Process captured output through test2json even if tests failed
