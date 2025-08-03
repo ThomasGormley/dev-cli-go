@@ -102,6 +102,12 @@ func Run(
 						Aliases: []string{"a"},
 						Value:   false,
 					},
+					&cli.BoolFlag{
+						Name:    "failed",
+						Usage:   "run only previously failed tests",
+						Aliases: []string{"f"},
+						Value:   false,
+					},
 				},
 				Action: handleTest(stdout, stderr),
 			},
