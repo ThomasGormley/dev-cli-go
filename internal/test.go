@@ -118,7 +118,7 @@ func buildTestOptions(tests []TestInfo) ([]string, map[string]TestInfo) {
 
 		// Add individual test options for this package
 		for _, test := range testsInPackage {
-			uniqueName := fmt.Sprintf("\t🧪%s", test.Name)
+			uniqueName := fmt.Sprintf(" 🧪 %s", test.Name)
 			testOptions = append(testOptions, uniqueName)
 			testLookup[uniqueName] = test
 		}
