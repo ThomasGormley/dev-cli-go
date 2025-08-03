@@ -85,12 +85,13 @@ func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 
 func handleDiarySync(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		stdout.Write([]byte("Syncing diary entries...\n"))
-		err := prepareCmd(c.Context, nil, stdout, stderr, path.Join(diaryDir, "scripts", "commit-changes.sh")).Run()
-		if err != nil {
+		stdout.Write([]byte("Syncing Diary repository with the remote...\n"))
+		if err := diary.SyncToRemote(); err != nil {
+			stderr.Write([]byte("Failed to sync ❌\n"))
 			return cli.Exit(err, 1)
 		}
 
+		stdout.Write([]byte("Synced ✅\n"))
 		return nil
 	}
 }

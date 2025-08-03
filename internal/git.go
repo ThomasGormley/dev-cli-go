@@ -1,57 +1,17 @@
 package cli
 
 import (
-	"bytes"
-	"os"
-	"os/exec"
-	"path"
+	"github.com/thomasgormley/dev-cli-go/internal/git"
 )
 
 func isGitRepo() bool {
-	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	return cmd.Run() == nil
+	return git.IsRepo()
 }
 
 func gitBranch() (string, error) {
-	cmd := exec.Command("git", "branch", "--show-current")
-	out, err := cmd.Output()
-	return string(bytes.TrimSpace(out)), err
+	return git.CurrentBranch()
 }
-
-var gitPullRequestTemplatePaths = []string{
-	"./",
-	"./.github/PULL_REQUEST_TEMPLATE/",
-	"./.github/",
-	"./docs/",
-}
-
-const pullRequestTemplateFilename = "PULL_REQUEST_TEMPLATE.md"
 
 func repoPRTemplate() string {
-	root, err := gitRoot()
-
-	if err != nil {
-		return ""
-	}
-
-	for _, p := range gitPullRequestTemplatePaths {
-		path := path.Join(root, p, pullRequestTemplateFilename)
-		if _, err := os.Stat(path); err == nil {
-			file, err := os.ReadFile(path)
-			if err != nil {
-				return ""
-			}
-			return string(file)
-		}
-	}
-	return ""
-}
-
-func gitRoot() (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return string(bytes.TrimSpace(out)), nil
+	return git.GetPRTemplate()
 }
