@@ -13,6 +13,8 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+var failedTestsFile = os.Getenv("HOME") + "/.dev-cli-failed-tests"
+
 func handleTest(stdout, stderr io.Writer) cli.ActionFunc {
 	goTest := goTest{
 		stdin:  os.Stdin,
@@ -23,14 +25,27 @@ func handleTest(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(ctx *cli.Context) error {
 
 		shouldRunAll := ctx.Bool("all")
-		shouldRunFailed := ctx.Bool("failed")
+		shouldRunFailedOnly := ctx.Bool("failed")
 
 		if shouldRunAll {
 			return goTest.run(ctx.Context, "./...")
 		}
 
-		if shouldRunFailed {
-			return goTest.runFailed(ctx.Context)
+		if shouldRunFailedOnly {
+			failedTests, err := goTest.readFailedTests()
+			if err != nil {
+				return fmt.Errorf("failed to read failed tests: %w", err)
+			}
+
+			if len(failedTests) == 0 {
+				fmt.Fprintf(stdout, "No previously failed tests found\n")
+				return nil
+			}
+
+			fmt.Fprintf(stdout, "Running %d previously failed tests...\n", len(failedTests))
+
+			testPattern := buildRunPattern(failedTests)
+			return goTest.run(ctx.Context, "./...", "-run", testPattern)
 		}
 
 		return nil
@@ -53,8 +68,8 @@ type TestEvent struct {
 	Output  string `json:"Output,omitempty"`
 }
 
-func (gt goTest) run(ctx context.Context, path string) error {
-	cmd := gt.prepareCmd(ctx, path)
+func (gt goTest) run(ctx context.Context, path string, args ...string) error {
+	cmd := gt.prepareCmd(ctx, path, args...)
 
 	// Capture output while writing to stdout
 	var capturedOutput bytes.Buffer
@@ -73,6 +88,9 @@ func (gt goTest) run(ctx context.Context, path string) error {
 	// Save failures for --failed flag
 	if len(failures) > 0 {
 		gt.saveFailedTests(failures)
+	} else {
+		// All tests passed, remove any existing failed tests file
+		os.Remove(failedTestsFile)
 	}
 
 	// Return the original error (test failures are expected)
@@ -118,9 +136,9 @@ func (gt goTest) parseTestOutput(ctx context.Context, output []byte) ([]string, 
 }
 
 func (gt goTest) saveFailedTests(failures []string) {
-	f, err := os.Create(".dev-cli-failed-tests")
+	f, err := os.Create(failedTestsFile)
 	if err != nil {
-		fmt.Fprintf(gt.stderr, "Warning: failed to create .dev-cli-failed-tests file: %v\n", err)
+		fmt.Fprintf(gt.stderr, "Warning: failed to create %s: %v\n", failedTestsFile, err)
 		return
 	}
 	defer f.Close()
@@ -138,58 +156,8 @@ func (gt goTest) saveFailedTests(failures []string) {
 	}
 }
 
-func (gt goTest) runFailed(ctx context.Context) error {
-	failedTests, err := gt.readFailedTests()
-	if err != nil {
-		return fmt.Errorf("failed to read failed tests: %w", err)
-	}
-
-	if len(failedTests) == 0 {
-		fmt.Fprintf(gt.stdout, "No previously failed tests found\n")
-		return nil
-	}
-
-	fmt.Fprintf(gt.stdout, "Running %d previously failed tests...\n", len(failedTests))
-
-	// Build test pattern to run all failed tests at once
-	testPattern := "^(" + failedTests[0]
-	for _, test := range failedTests[1:] {
-		testPattern += "|" + test
-	}
-	testPattern += ")$"
-
-	cmd := gt.prepareCmd(ctx, "./...", "-run", testPattern)
-
-	// Capture output while writing to stdout
-	var capturedOutput bytes.Buffer
-	multiWriter := io.MultiWriter(gt.stdout, &capturedOutput)
-	cmd.Stdout = multiWriter
-
-	err = cmd.Run()
-
-	// Process captured output through test2json to find which tests still fail
-	stillFailing, parseErr := gt.parseTestOutput(ctx, capturedOutput.Bytes())
-	if parseErr != nil {
-		fmt.Fprintf(gt.stderr, "Warning: failed to parse test output: %v\n", parseErr)
-		// If we can't parse, keep all the original failed tests
-		stillFailing = failedTests
-	}
-
-	// Update the failed tests file with only the tests that are still failing
-	if len(stillFailing) > 0 {
-		gt.saveFailedTests(stillFailing)
-		fmt.Fprintf(gt.stdout, "%d tests still failing\n", len(stillFailing))
-	} else {
-		// All tests passed, remove the failed tests file
-		os.Remove(".dev-cli-failed-tests")
-		fmt.Fprintf(gt.stdout, "All previously failed tests now pass!\n")
-	}
-
-	return err
-}
-
 func (gt goTest) readFailedTests() ([]string, error) {
-	file, err := os.Open(".dev-cli-failed-tests")
+	file, err := os.Open(failedTestsFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []string{}, nil // No failed tests file exists
@@ -208,4 +176,20 @@ func (gt goTest) readFailedTests() ([]string, error) {
 	}
 
 	return tests, scanner.Err()
+}
+
+func buildRunPattern(testNames []string) string {
+	if len(testNames) == 0 {
+		return ""
+	}
+	if len(testNames) == 1 {
+		return "^" + testNames[0] + "$"
+	}
+
+	pattern := "^(" + testNames[0]
+	for _, test := range testNames[1:] {
+		pattern += "|" + test
+	}
+	pattern += ")$"
+	return pattern
 }
