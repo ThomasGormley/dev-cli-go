@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -18,7 +19,7 @@ var diaryDir = path.Join(os.Getenv("HOME"), "dev", "engineering-diary")
 
 func handleDiaryNew(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		if err := diary.Create(); err != nil {
+		if err := diary.NewEntry(); err != nil {
 			return cli.Exit(err, 1)
 		}
 
@@ -63,21 +64,16 @@ func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 			entryPath = entryPath + fmt.Sprintf(":%d:1", lineCount)
 		}
 
+		// So we don't open the file in some random repo window we need to
 		// open the repository first...
-		cmd := exec.CommandContext(c.Context, editorPath, append(editorArgs, diaryRepo)...)
-		cmd.Stdout = stdout
-		cmd.Stderr = stderr
-		cmd.Stdin = os.Stdin
+		cmd := prepareCmd(c.Context, os.Stdin, stdout, stderr, editorPath, append(editorArgs, diaryRepo)...)
 
 		if err := cmd.Start(); err != nil {
 			return cli.Exit(err, 1)
 		}
 
-		// then the file
-		cmd = exec.CommandContext(c.Context, editorPath, append(editorArgs, entryPath)...)
-		cmd.Stdout = stdout
-		cmd.Stderr = stderr
-		cmd.Stdin = os.Stdin
+		// then the file...
+		cmd = prepareCmd(c.Context, os.Stdin, stdout, stderr, editorPath, append(editorArgs, entryPath)...)
 
 		if err := cmd.Start(); err != nil {
 			return cli.Exit(err, 1)
@@ -90,7 +86,7 @@ func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 func handleDiarySync(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		stdout.Write([]byte("Syncing diary entries...\n"))
-		err := prepareCmd(nil, stdout, stderr, path.Join(diaryDir, "scripts", "commit-changes.sh")).Run()
+		err := prepareCmd(c.Context, nil, stdout, stderr, path.Join(diaryDir, "scripts", "commit-changes.sh")).Run()
 		if err != nil {
 			return cli.Exit(err, 1)
 		}
@@ -99,8 +95,8 @@ func handleDiarySync(stdout, stderr io.Writer) cli.ActionFunc {
 	}
 }
 
-func prepareCmd(stdin io.Reader, stdout, stderr io.Writer, name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
+func prepareCmd(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = stdout
 	cmd.Stdin = stdin
 	cmd.Stderr = stderr

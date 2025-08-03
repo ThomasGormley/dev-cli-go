@@ -62,14 +62,14 @@ func EnsureEntryExists(t time.Time) (string, error) {
 		return "", mkErr
 	}
 
-	if err := Create(); err != nil {
+	if err := NewEntry(); err != nil {
 		return "", err
 	}
 
 	return entryPath, nil
 }
 
-func Create() error {
+func NewEntry() error {
 	repo, ok := RepoPath()
 	if !ok {
 		return errors.New("unable to find diary repo")
