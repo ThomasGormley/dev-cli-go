@@ -9,9 +9,19 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 
+	"github.com/AlecAivazis/survey/v2"
 	"github.com/urfave/cli/v2"
 )
+
+type TestInfo struct {
+	Name        string
+	PackagePath string
+	FileName    string
+	IsPackage   bool // true if this represents a whole package
+}
 
 var failedTestsFile = os.Getenv("HOME") + "/.dev-cli-failed-tests"
 
@@ -44,12 +54,173 @@ func handleTest(stdout, stderr io.Writer) cli.ActionFunc {
 
 			fmt.Fprintf(stdout, "Running %d previously failed tests...\n", len(failedTests))
 
-			testPattern := buildRunPattern(failedTests)
+			testPattern := buildRunPattern(failedTests...)
 			return goTest.run(ctx.Context, "./...", "-run", testPattern)
 		}
 
-		return nil
+		tests, err := ListTestsFromProject()
+		if err != nil {
+			return err
+		}
+
+		var testOptions []string
+		testLookup := make(map[string]TestInfo)
+
+		// Group tests by package
+		packageTests := make(map[string][]TestInfo)
+		for _, test := range tests {
+			pkg := strings.TrimPrefix(strings.TrimSuffix(test.PackagePath, "/..."), "./")
+			packageTests[pkg] = append(packageTests[pkg], test)
+		}
+
+		// Sort packages for consistent ordering
+		var packages []string
+		for pkg := range packageTests {
+			packages = append(packages, pkg)
+		}
+		for i := 0; i < len(packages); i++ {
+			for j := i + 1; j < len(packages); j++ {
+				if packages[i] > packages[j] {
+					packages[i], packages[j] = packages[j], packages[i]
+				}
+			}
+		}
+
+		// Group package options with their individual tests
+		for _, pkg := range packages {
+			testsInPackage := packageTests[pkg]
+
+			// Add package-level option if there are multiple tests
+			if len(testsInPackage) > 1 {
+				packageOption := fmt.Sprintf("📦 %s (all %d tests)", pkg, len(testsInPackage))
+				testOptions = append(testOptions, packageOption)
+				testLookup[packageOption] = TestInfo{
+					Name:        "",
+					PackagePath: "./" + pkg + "/...",
+					FileName:    "",
+					IsPackage:   true,
+				}
+			}
+
+			// Add individual test options for this package
+			for _, test := range testsInPackage {
+				uniqueName := fmt.Sprintf("  🧪 %s", test.Name)
+				testOptions = append(testOptions, uniqueName)
+				testLookup[uniqueName] = test
+			}
+		}
+
+		var testName string
+		// configure it for a specific prompt
+		prompt := &survey.Select{
+			Message:  "Choose a test:",
+			Options:  testOptions,
+			Filter:   contains,
+			PageSize: 16,
+		}
+
+		// or define a default for all of the questions
+		if err := survey.AskOne(prompt, &testName); err != nil {
+			return err
+		}
+
+		// Get the package path for the selected test
+		selectedTest, exists := testLookup[testName]
+		if !exists {
+			return fmt.Errorf("selected test %s not found in lookup", testName)
+		}
+
+		packagePath := selectedTest.PackagePath
+
+		if selectedTest.IsPackage {
+			// Run all tests in the package
+			return goTest.run(ctx.Context, packagePath)
+		} else {
+			// Run specific test
+			runPattern := buildRunPattern(selectedTest.Name)
+			return goTest.run(ctx.Context, packagePath, "-run", runPattern)
+		}
 	}
+}
+
+func contains(filterValue string, optValue string, optIndex int) bool {
+	// only include the option if it includes the filter
+	return strings.Contains(optValue, filterValue)
+}
+
+func ListTests(reader io.Reader) ([]TestInfo, error) {
+	var tests []TestInfo
+
+	// Parse the ripgrep output line by line
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Format: filename:line_number:func TestName(
+		parts := bytes.SplitN([]byte(line), []byte(":"), 3)
+		if len(parts) < 3 {
+			continue
+		}
+
+		filename := string(parts[0])
+		content := string(parts[2])
+
+		// Extract test function name
+		// Looking for "func TestXxx(" pattern
+		if bytes.Contains([]byte(content), []byte("func Test")) {
+			start := bytes.Index([]byte(content), []byte("func "))
+			if start == -1 {
+				continue
+			}
+
+			// Find the function name
+			funcStart := start + 5 // len("func ")
+			funcEnd := bytes.Index([]byte(content[funcStart:]), []byte("("))
+			if funcEnd == -1 {
+				continue
+			}
+
+			testName := string(content[funcStart : funcStart+funcEnd])
+			// Only add if it starts with "Test" and is not "TestMain"
+			if bytes.HasPrefix([]byte(testName), []byte("Test")) && testName != "TestMain" {
+				// Extract package path from filename
+				packagePath := extractPackagePath(filename)
+
+				tests = append(tests, TestInfo{
+					Name:        testName,
+					PackagePath: packagePath,
+					FileName:    filename,
+				})
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error scanning ripgrep output: %w", err)
+	}
+
+	return tests, nil
+}
+
+func ListTestsFromProject() ([]TestInfo, error) {
+	// Use ripgrep to find all Go test functions in *_test.go files only
+	cmd := exec.Command("rg", "--type", "go", "-g", "*_test.go", "^func Test[A-Za-z0-9_]+\\(", "-n", "--no-heading")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to run ripgrep: %w", err)
+	}
+
+	return ListTests(bytes.NewReader(output))
+}
+
+func extractPackagePath(filename string) string {
+	// Convert filename to package path
+	// e.g., "internal/pr_test.go" -> "./internal/..."
+	dir := filepath.Dir(filename)
+	if dir == "." || dir == "" {
+		return "./"
+	}
+	return "./" + dir + "/..."
 }
 
 type goTest struct {
@@ -61,7 +232,7 @@ type goTest struct {
 	stderr io.Writer
 }
 
-type TestEvent struct {
+type testEvent struct {
 	Action  string `json:"Action"`
 	Package string `json:"Package"`
 	Test    string `json:"Test"`
@@ -124,7 +295,7 @@ func (gt goTest) parseTestOutput(ctx context.Context, output []byte) ([]string, 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		var event TestEvent
+		var event testEvent
 		if json.Unmarshal([]byte(line), &event) == nil {
 			if event.Action == "fail" && event.Test != "" {
 				failures = append(failures, event.Test)
@@ -178,12 +349,13 @@ func (gt goTest) readFailedTests() ([]string, error) {
 	return tests, scanner.Err()
 }
 
-func buildRunPattern(testNames []string) string {
+func buildRunPattern(testNames ...string) string {
 	if len(testNames) == 0 {
 		return ""
 	}
 	if len(testNames) == 1 {
-		return "^" + testNames[0] + "$"
+		// For single test, just use the name without anchors to allow partial matching
+		return testNames[0]
 	}
 
 	pattern := "^(" + testNames[0]
