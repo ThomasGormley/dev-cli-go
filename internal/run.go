@@ -91,6 +91,20 @@ func Run(
 					},
 				},
 			},
+			{
+				Name:    "test",
+				Usage:   "Testing utilities",
+				Aliases: []string{"t"},
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name:    "all",
+						Usage:   "runs all tests",
+						Aliases: []string{"a"},
+						Value:   false,
+					},
+				},
+				Action: handleTest(stdout, stderr),
+			},
 		},
 	}
 
