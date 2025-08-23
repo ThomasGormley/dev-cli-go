@@ -1,14 +1,19 @@
 #!/bin/bash
+set -eo pipefail
 
 # Define the binary name and installation path
 BINARY_NAME="dev"
 BINARY_LOCATION="bin/$BINARY_NAME"
-INSTALL_DIR="$HOME/bin"
+INSTALL_DIR="/usr/local/bin"
+SCRIPT_DIR=$(dirname "$0")
+REPO_DIR=$(dirname "$SCRIPT_DIR")
+DIR_BINARY=${REPO_DIR}/bin/${BINARY_NAME}
 
 # Check if the binary exists
-if [ ! -f "./bin/$BINARY_NAME" ]; then
-    echo "❌ Error: Binary '$BINARY_NAME' does not exist."
-    exit 1
+if [ ! -f ${DIR_BINARY} ]; then
+    echo "❌ Binary '$BINARY_NAME' does not exist."
+    echo "❌ Building..."
+    go build -C ${REPO_DIR} -o ${DIR_BINARY}
 fi
 
 # Check for write permission to the install directory

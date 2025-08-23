@@ -111,6 +111,19 @@ func Run(
 				},
 				Action: handleTest(stdout, stderr),
 			},
+			{
+				Name:    "checkout",
+				Usage:   "Checkout branches with automatic worktree creation",
+				Aliases: []string{"co"},
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "branch",
+						Usage:   "branch to checkout",
+						Aliases: []string{"b"},
+					},
+				},
+				Action: handleCheckout(stdout, stderr),
+			},
 		},
 	}
 

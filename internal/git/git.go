@@ -73,3 +73,36 @@ func Commit(message string) error {
 func Push(remote, branch string) error {
 	return exec.Command("git", "push", remote, branch).Run()
 }
+
+// ListWorktrees returns a list of all worktrees for the repository
+func ListWorktrees() ([]string, error) {
+	cmd := exec.Command("git", "worktree", "list")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	lines := bytes.Split(bytes.TrimSpace(out), []byte("\n"))
+	worktrees := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		fields := bytes.Fields(line)
+		if len(fields) > 0 {
+			worktrees = append(worktrees, string(fields[0]))
+		}
+	}
+
+	return worktrees, nil
+}
+
+// CreateWorktree creates a new worktree for the specified branch at the given path
+func CreateWorktree(branch, path string) error {
+	cmd := exec.Command("git", "worktree", "add", path, branch)
+	return cmd.Run()
+}
+
+// RemoveWorktree removes the worktree at the specified path
+func RemoveWorktree(path string) error {
+	cmd := exec.Command("git", "worktree", "remove", path)
+	return cmd.Run()
+}
