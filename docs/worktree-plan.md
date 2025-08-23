@@ -43,6 +43,8 @@ This document outlines the plan for implementing worktree integration in the `de
 ✅ Automatically creates worktree if it doesn't exist
 ✅ Uses simple directory structure in parent folder
 ✅ Basic workflow tested successfully
+✅ Added branch prompting when no branch is provided
+✅ Fuzzy find over list of local branches from most recent descending
 
 ### Phase 2: Tmux Session Integration
 

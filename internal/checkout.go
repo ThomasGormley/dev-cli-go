@@ -3,10 +3,11 @@ package cli
 import (
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
+	"github.com/AlecAivazis/survey/v2"
 	"github.com/thomasgormley/dev-cli-go/internal/git"
 	"github.com/urfave/cli/v2"
 )
@@ -19,7 +20,29 @@ func handleCheckout(stdout, stderr io.Writer) func(*cli.Context) error {
 
 		branch := c.String("branch")
 		if branch == "" {
-			return fmt.Errorf("branch name is required")
+			// Get list of branches sorted by most recent commit
+			branches, err := listBranches()
+			if err != nil {
+				return fmt.Errorf("failed to list branches: %w", err)
+			}
+
+			if len(branches) == 0 {
+				return fmt.Errorf("no branches found")
+			}
+
+			// Prompt user to select a branch
+			prompt := &survey.Select{
+				Message: "Choose a branch:",
+				Options: branches,
+			}
+
+			if err := survey.AskOne(prompt, &branch); err != nil {
+				return fmt.Errorf("failed to prompt for branch: %w", err)
+			}
+
+			if branch == "" {
+				return fmt.Errorf("no branch selected")
+			}
 		}
 
 		// Get repository root
@@ -55,8 +78,14 @@ func handleCheckout(stdout, stderr io.Writer) func(*cli.Context) error {
 		if !worktreeExists {
 			fmt.Fprintf(stdout, "Creating worktree for branch '%s' at %s\n", branch, worktreePath)
 			if err := git.CreateWorktree(branch, worktreePath); err != nil {
-				// If branch doesn't exist, create it
-				if err := exec.Command("git", "branch", branch).Run(); err != nil {
+				// If branch doesn't exist, create it first
+				fmt.Fprintf(stdout, "Branch '%s' does not exist, creating it from current branch...\n", branch)
+				currentBranch, err := git.CurrentBranch()
+				if err != nil {
+					return fmt.Errorf("failed to get current branch: %w", err)
+				}
+
+				if err := exec.Command("git", "branch", branch, currentBranch).Run(); err != nil {
 					return fmt.Errorf("failed to create branch: %w", err)
 				}
 				// Then create the worktree
@@ -69,11 +98,27 @@ func handleCheckout(stdout, stderr io.Writer) func(*cli.Context) error {
 		}
 
 		// Change to worktree directory
-		if err := os.Chdir(worktreePath); err != nil {
-			return fmt.Errorf("failed to change directory to worktree: %w", err)
-		}
+		// Note: We can't actually change the directory for the parent process,
+		// so we just inform the user where the worktree is located
+		fmt.Fprintf(stdout, "Worktree for branch '%s' is located at %s\n", branch, worktreePath)
 
 		fmt.Fprintf(stdout, "Switched to worktree for branch '%s'\n", branch)
 		return nil
 	}
+}
+
+func listBranches() ([]string, error) {
+	cmd := exec.Command("git", "for-each-ref", "--sort=-committerdate", "refs/heads/", "--format=%(refname:short)")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	branches := strings.Split(string(out), "\n")
+	// Remove empty string at the end if present
+	if len(branches) > 0 && branches[len(branches)-1] == "" {
+		branches = branches[:len(branches)-1]
+	}
+
+	return branches, nil
 }
