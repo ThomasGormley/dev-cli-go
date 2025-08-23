@@ -97,12 +97,27 @@ func handleCheckout(stdout, stderr io.Writer) func(*cli.Context) error {
 			fmt.Fprintf(stdout, "Worktree for branch '%s' already exists at %s\n", branch, worktreePath)
 		}
 
-		// Change to worktree directory
-		// Note: We can't actually change the directory for the parent process,
-		// so we just inform the user where the worktree is located
-		fmt.Fprintf(stdout, "Worktree for branch '%s' is located at %s\n", branch, worktreePath)
+		// Create a new tmux session for the worktree
+		sessionName := fmt.Sprintf("%s-%s", repoName, branch)
+		fmt.Fprintf(stdout, "Creating tmux session '%s' for worktree at %s\n", sessionName, worktreePath)
 
-		fmt.Fprintf(stdout, "Switched to worktree for branch '%s'\n", branch)
+		// Check if session already exists
+		tmuxCmd := exec.Command("tmux", "has-session", "-t", sessionName)
+		if tmuxCmd.Run() != nil {
+			// Session doesn't exist, create it
+			tmuxCmd = exec.Command("tmux", "new-session", "-d", "-s", sessionName, "-c", worktreePath)
+			if err := tmuxCmd.Run(); err != nil {
+				return fmt.Errorf("failed to create tmux session: %w", err)
+			}
+			fmt.Fprintf(stdout, "Created new tmux session '%s'\n", sessionName)
+		} else {
+			fmt.Fprintf(stdout, "Tmux session '%s' already exists\n", sessionName)
+		}
+
+		// Instead of attaching directly, instruct the user to run the attach command
+		fmt.Fprintf(stdout, "Created tmux session '%s' for worktree at %s\n", sessionName, worktreePath)
+		fmt.Fprintf(stdout, "To attach to the session, run: tmux attach-session -t %s\n", sessionName)
+
 		return nil
 	}
 }
