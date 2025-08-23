@@ -1,26 +1,17 @@
 # Worktree Feature Implementation Plan
 
 ## Overview
-<<<<<<< HEAD
 
 This document outlines the plan for implementing worktree integration in the `dev` CLI tool to enhance the development workflow with git worktrees and tmux sessions.
 
 ## Current Workflow
 
-=======
-This document outlines the plan for implementing worktree integration in the `dev` CLI tool to enhance the development workflow with git worktrees and tmux sessions.
-
-## Current Workflow
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
 - Using `tmux-sessionizer` to manage development environments
 - Existing git aliases for worktree management (`gwtls`, `gwta`, etc.)
 - Need to streamline branch checkout with automatic worktree creation
 
 ## Proposed Workflow
-<<<<<<< HEAD
 
-=======
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
 1. `dev checkout` - Shows in-progress linear tickets/branches or creates one
 2. Automatically checks out branch to a worktree in the same parent folder as base repo
 3. If checking out a branch that exists as a tmux session, open that session
@@ -30,10 +21,7 @@ This document outlines the plan for implementing worktree integration in the `de
 ### Phase 1: Basic Branch Checkout with Worktree (MVP)
 
 #### Goals
-<<<<<<< HEAD
 
-=======
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
 - Implement `dev checkout <branch>` command
 - Automatically create worktree if it doesn't exist
 - Use simple directory structure in parent folder
@@ -55,32 +43,18 @@ This document outlines the plan for implementing worktree integration in the `de
    - Verify worktree location works with tmux-sessionizer
 
 #### Status
-<<<<<<< HEAD
 
-=======
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
 ✅ Implemented `dev checkout <branch>` command
 ✅ Automatically creates worktree if it doesn't exist
 ✅ Uses simple directory structure in parent folder
 ✅ Basic workflow tested successfully
-<<<<<<< HEAD
-<<<<<<< HEAD
 ✅ Added branch prompting when no branch is provided
 ✅ Fuzzy find over list of local branches from most recent descending
-=======
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
-=======
-✅ Added branch prompting when no branch is provided
-✅ Fuzzy find over list of local branches from most recent descending
->>>>>>> 1f5b279 (Add branch prompting and fuzzy find for checkout command)
 
 ### Phase 2: Tmux Session Integration
 
 #### Goals
-<<<<<<< HEAD
 
-=======
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
 - Integrate with tmux sessions for seamless workflow
 
 #### Implementation Steps
@@ -95,7 +69,6 @@ This document outlines the plan for implementing worktree integration in the `de
    - Attach to session if it exists
    - Create new session and worktree if needed
 
-<<<<<<< HEAD
 #### Status
 
 ✅ Added tmux session creation for worktrees
@@ -106,11 +79,6 @@ This document outlines the plan for implementing worktree integration in the `de
 
 #### Goals
 
-=======
-### Phase 3: Branch Selection Interface
-
-#### Goals
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
 - Implement interactive branch selection
 - Show in-progress tickets/branches
 
@@ -128,10 +96,7 @@ This document outlines the plan for implementing worktree integration in the `de
 ### Phase 4: Cleanup and Maintenance
 
 #### Goals
-<<<<<<< HEAD
 
-=======
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
 - Implement worktree cleanup functionality
 
 #### Implementation Steps
@@ -141,10 +106,7 @@ This document outlines the plan for implementing worktree integration in the `de
    - Automatic cleanup options
 
 ## Directory Structure
-<<<<<<< HEAD
 
-=======
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
 ```
 parent/
 ├── repo/              # Main repository
@@ -154,15 +116,8 @@ parent/
 ```
 
 ## Benefits
-<<<<<<< HEAD
 
 - Seamless workflow between git worktrees and tmux sessions
 - Reduced context switching
 - Cleaner organization of feature work
 - Integration with existing tmux-sessionizer setup
-=======
-- Seamless workflow between git worktrees and tmux sessions
-- Reduced context switching
-- Cleaner organization of feature work
-- Integration with existing tmux-sessionizer setup
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
