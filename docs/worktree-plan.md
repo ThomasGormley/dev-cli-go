@@ -64,10 +64,15 @@ This document outlines the plan for implementing worktree integration in the `de
 ✅ Uses simple directory structure in parent folder
 ✅ Basic workflow tested successfully
 <<<<<<< HEAD
+<<<<<<< HEAD
 ✅ Added branch prompting when no branch is provided
 ✅ Fuzzy find over list of local branches from most recent descending
 =======
 >>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
+=======
+✅ Added branch prompting when no branch is provided
+✅ Fuzzy find over list of local branches from most recent descending
+>>>>>>> 1f5b279 (Add branch prompting and fuzzy find for checkout command)
 
 ### Phase 2: Tmux Session Integration
 
