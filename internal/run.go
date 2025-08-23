@@ -124,6 +124,7 @@ func Run(
 				},
 				Action: handleCheckout(stdout, stderr),
 			},
+<<<<<<< HEAD
 			{
 				Name:    "workflow",
 				Usage:   "Workflow utilities",
@@ -142,6 +143,8 @@ func Run(
 					},
 				},
 			},
+=======
+>>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
 		},
 	}
 
