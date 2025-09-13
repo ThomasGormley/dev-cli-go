@@ -134,6 +134,15 @@ func Run(
 						Action: handleWorkflowStart(),
 						Args:   true,
 					},
+					{
+						Name:   "switch",
+						Action: handleWorkflowSwitch(),
+						Args:   false, // Optional argument for query prefill
+					},
+					{
+						Name:   "status",
+						Action: handleWorkflowStatus(),
+					},
 				},
 			},
 		},

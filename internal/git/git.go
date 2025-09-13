@@ -147,3 +147,20 @@ func Stash() error {
 func StashPop() error {
 	return exec.Command("git", "stash", "pop").Run()
 }
+
+// ListBranches returns a list of all branches
+func ListBranches() ([]string, error) {
+	cmd := exec.Command("git", "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	branches := bytes.Split(bytes.TrimSpace(out), []byte("\n"))
+	result := make([]string, 0, len(branches))
+	for _, b := range branches {
+		if len(b) > 0 {
+			result = append(result, string(b))
+		}
+	}
+	return result, nil
+}

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -27,18 +25,6 @@ type WorkflowEntry struct {
 }
 
 type WorkflowState []WorkflowEntry
-
-// Slugify function for branch names
-func slugify(s string) string {
-	// Convert to lowercase
-	s = strings.ToLower(s)
-	// Replace spaces and non-alphanumeric with hyphens
-	reg := regexp.MustCompile(`[^a-z0-9]+`)
-	s = reg.ReplaceAllString(s, "-")
-	// Remove leading/trailing hyphens
-	s = strings.Trim(s, "-")
-	return s
-}
 
 func handleWorkflowStart() cli.ActionFunc {
 	token, ok := os.LookupEnv("LINEAR_API_KEY")
@@ -87,12 +73,11 @@ func handleWorkflowStart() cli.ActionFunc {
 					return err
 				}
 				didStash = true
-			} else {
-				return errors.New("aborted due to uncommitted changes")
 			}
+
+			// just allow git auto resolution
 		}
 
-		// Checkout main branch
 		mainBranch, err := git.DetectMainBranch()
 		if err != nil {
 			return err
@@ -102,19 +87,16 @@ func handleWorkflowStart() cli.ActionFunc {
 			return err
 		}
 
-		// Pull
 		err = git.Pull()
 		if err != nil {
 			return err
 		}
 
-		// Checkout new branch
 		err = git.CreateBranch(string(branchName))
 		if err != nil {
 			return err
 		}
 
-		// Pop stash if we stashed earlier
 		if didStash {
 			pop, err := promptForPop()
 			if err != nil {
@@ -128,7 +110,6 @@ func handleWorkflowStart() cli.ActionFunc {
 			}
 		}
 
-		// Store status
 		err = storeWorkflowStatus(ticketID, string(branchName))
 		if err != nil {
 			return err
