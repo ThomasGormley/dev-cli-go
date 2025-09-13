@@ -11,12 +11,12 @@ type Client struct {
 	client *graphql.Client
 }
 
-func NewClient(token string) *Client {
+func NewClient(token string) Client {
 	httpClient := &http.Client{
 		Transport: &authTransport{token: token},
 	}
 
-	return &Client{
+	return Client{
 		client: graphql.NewClient("https://api.linear.app/graphql", httpClient),
 	}
 }

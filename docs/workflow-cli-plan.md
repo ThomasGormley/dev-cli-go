@@ -21,38 +21,55 @@ The `dev workflow` CLI is a lightweight tool to streamline your software develop
 
 The CLI extends your `dev` CLI with a `workflow` subcommand, using a local state file (`~/.dev_workflow_state.json`) to track tickets, branches, and PRs. Features are split into iterations, ordered by value-to-effort ratio, with evaluation steps to measure impact.
 
-### Iteration 1: Core State Tracking & Context Switching (3-4 hours)
+### ✅ COMPLETED: Iteration 1: Core State Tracking & Context Switching (3-4 hours)
 
-**Goal**: Replace your `dev checkout` idea with a robust `dev workflow switch` and basic state management, saving ~5-10 min/day by eliminating branch hunting and context recall.
+**Goal**: Replace your `dev checkout` idea with a robust `dev workflow checkout` and basic state management, saving ~5-10 min/day by eliminating branch hunting and context recall.
 
-**Features**:
+**Features Implemented**:
 
-1. [SKIP] **State File Setup** (`dev workflow init`):
-   - Creates a state file to track active tickets, branches, PRs, and statuses:
-     ```json
-     [
-       {
-         "ticketId": "ENG-123",
-         "branch": "eng-123-fix-login",
-         "prUrl": null,
-         "status": "in-progress", // "in-progress", "in-review", "merged"
-         "dependencies": [],
-         "lastUpdated": "2025-09-13T11:37:00Z"
-       }
-     ]
-     ```
-   - Prompts for configuration (e.g., external system credentials, repo path).
-2. **Start Ticket** (`dev workflow start <ticketId>`):
-   - Assigns ticket to you in Linear.
-   - Generates branch name (e.g., `eng-123-<slug>`), copies to clipboard, checks out branch.
-   - Adds entry to state file with "in-progress" status.
-3. **Switch Context** (`dev workflow switch <fuzzyQuery>`):
-   - Fuzzy searches state and branches (integrates with your fuzzy finder).
-   - Checks out matching branch, pulls latest.
-   - Displays ticket details and PR status if applicable.
-4. **Status Overview** (`dev workflow status`):
+1. **Unified Smart Checkout** (`dev workflow checkout`):
+   - **No args**: Interactive selection from brnaches
+   - **Ticket ID** (e.g., `ENG-123`): Auto-detects start vs. checkout existing workflow
+   - Handles uncommitted changes with stash/pop prompts
+   - Auto-pulls latest changes after checkout
+
+2. **Optimized State Management**:
+   - **Map-based storage**: Changed from array to `map[string]WorkflowEntry` for O(1) lookups
+   - **Automatic state persistence**: Updates state file on workflow start/completion
+   - State file location: `~/.dev_workflow_state.json`
+
+3. **Enhanced Linear Integration**:
+   - **GetAssignedIssues()**: Fetches user's assigned tickets for interactive selection
+   - **Auto-assignment**: Assigns tickets to current user when starting workflow
+   - **Branch name generation**: Uses Linear's branch name field for consistency
+
+4. **Improved Error Handling**:
+   - Better error messages for non-existent branches
+   - Clear feedback for uncommitted changes scenarios
+   - Graceful handling of Linear API failures
+
+5. **Code Quality Improvements**:
+   - Consolidated workflow logic into `workflow_checkout.go`
+   - Clean separation of concerns between functions
+
+**State File Format** (Updated):
+
+```json
+{
+  "ENG-123": {
+    "ticketId": "ENG-123",
+    "branch": "eng-123-fix-login",
+    "prUrl": null,
+    "status": "in-progress",
+    "dependencies": [],
+    "lastUpdated": "2025-09-13T11:37:00Z"
+  }
+}
+```
+
+6. **Status Overview** (`dev workflow status`):
    - Lists all state entries in a table (ticketId, branch, status, PR URL, lastUpdated).
-   - Checks external systems for PR updates only when needed.
+   - Shows workflow entries with their current status and metadata.
 
 **Evaluation**:
 
@@ -106,34 +123,58 @@ The CLI extends your `dev` CLI with a `workflow` subcommand, using a local state
 
 ## Example Usage Flow
 
-1. **Setup**: `dev workflow init` (configure credentials, repo).
-2. **Start Ticket**: `dev workflow start ENG-123` → assigns, creates/checks out `eng-123-fix-login`.
-3. **Code & PR**: Code, then `dev workflow pr` → creates PR, assigns team.
-4. **Start Stacked Ticket**: `dev workflow stack ENG-123` → creates `eng-123-part2`.
-5. **Check Status**: `dev workflow status` → shows:
+1. **Setup**: Ensure `LINEAR_API_KEY` environment variable is set.
+2. **Interactive Selection**: `dev workflow checkout` → shows assigned Linear tickets for selection.
+3. **Start New Ticket**: `dev workflow checkout ENG-123` → assigns ticket, creates/checks out branch, updates state.
+4. **Switch Context**: `dev workflow checkout 123` → fuzzy searches and checks out matching branch.
+5. **Check Status**: `dev workflow status` → shows current workflow state:
    ```
-   | Ticket   | Branch              | Status     | PR URL | Last Updated |
-   |----------|---------------------|------------|--------|--------------|
-   | ENG-123  | eng-123-fix-login  | in-review  | [link] | 2h ago       |
-   | ENG-123  | eng-123-part2      | in-progress| N/A    | now          |
-   Warning: ENG-123 PR stale (2h).
+   Ticket ID   Branch              Status       PR URL    Last Updated
+   ----------  ------------------  -----------  --------  -------------
+   ENG-123     eng-123-fix-login  in-progress  N/A       2h ago
+   ENG-456     eng-456-api-update in-progress  N/A       1h ago
    ```
-6. **Nudge**: `dev workflow nudge ENG-123` → pings team.
-7. **Switch**: `dev workflow switch 123` → checks out `eng-123-fix-login`, shows comments.
-8. **Finish**: `dev workflow done ENG-123` → deletes branch, closes ticket, rebases `eng-123-part2`.
+6. **Code & Commit**: Make changes, commit as usual.
+7. **Future**: PR creation and dependency tracking (Iterations 2-3).
+
+**Command Intelligence**:
+
+- `dev workflow checkout` (no args) → Interactive ticket selection
+- `dev workflow checkout ENG-123` (ticket ID) → Start new or checkout existing workflow
 
 ## Build Notes
 
-- **Integration**: Extends your `dev` CLI and fuzzy finder.
-- **Safety**: Validate inputs (e.g., ticket exists), handle external system failures (fallback to manual), backup state file.
-- **Extensibility**: Support hooks (e.g., post-start runs linter) via config.
+- **Integration**: Extends your `dev` CLI with unified workflow command structure.
+- **Architecture**: Single `workflow_checkout.go` file contains all core logic with clean separation of concerns.
+- **State Management**: Optimized map-based storage for O(1) lookups, backward compatible with array format.
+- **Safety**: Comprehensive error handling for branch operations, uncommitted changes, and API failures.
+- **Performance**: Reduced complexity from multiple commands to single intelligent command with auto-detection.
+- **Code Quality**: Removed unnecessary pointer usage, consolidated functions, improved readability.
+- **Extensibility**: Ready for PR creation and dependency tracking features in future iterations.
+
+## Current Status & Next Steps
+
+**✅ COMPLETED**: Core workflow functionality with unified command structure
+
+- **Time Savings**: Single command replaces multiple manual steps
+- **Error Reduction**: Auto-detection prevents wrong branch checkouts
+- **User Experience**: Interactive selection and fuzzy finding reduce cognitive load
+- **Performance**: O(1) state lookups with map-based storage
+
+**🚀 READY FOR ITERATION 2**: PR Automation & Dependency Tracking
+
+- Next: Implement `dev workflow pr` for PR creation and state updates
+- Add dependency tracking for stacked changes
+- Build cleanup functionality for completed workflows
 
 ## Evaluation Plan
 
-- **Pre-Implementation**:
-  - Log time spent on transitions (start, switch, PR) for 1 week.
-  - Count tickets closed, errors (e.g., wrong branch, conflicts).
-  - Rate focus (1-10) daily.
+- **Current Implementation Testing**:
+  - Test unified checkout command with various input scenarios
+  - Verify state persistence and backward compatibility
+  - Measure time savings vs. manual branch switching
+- **Pre-Implementation** (Completed):
+  - Logged baseline transition times and error rates
 - **Post-Iteration**:
   - After each iteration, log same metrics for 1 week.
   - Compare: Expect ~50% less transition time, ~10% more tickets closed, ~80% fewer errors.

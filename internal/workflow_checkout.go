@@ -16,77 +16,6 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-// Workflow state structures
-type WorkflowEntry struct {
-	TicketID     string    `json:"ticketId"`
-	Branch       string    `json:"branch"`
-	PrURL        string    `json:"prUrl"`
-	Status       string    `json:"status"`
-	Dependencies []string  `json:"dependencies"`
-	LastUpdated  time.Time `json:"lastUpdated"`
-}
-
-type WorkflowState map[string]WorkflowEntry
-
-// buildWorkflowOptions builds the options list and lookup map for workflow entries and branches
-func buildWorkflowOptions(state WorkflowState, branches []string) ([]string, map[string]string) {
-	var options []string
-	optionMap := make(map[string]string)
-
-	// Add workflow state entries first
-	for _, entry := range state {
-		option := fmt.Sprintf("🎫 %s (%s)", entry.Branch, entry.TicketID)
-		options = append(options, option)
-		optionMap[option] = entry.Branch
-	}
-
-	// Add branches that aren't already in state
-	for _, branch := range branches {
-		found := false
-		for _, entry := range state {
-			if entry.Branch == branch {
-				found = true
-				break
-			}
-		}
-		if !found {
-			option := fmt.Sprintf("🌿 %s", branch)
-			options = append(options, option)
-			optionMap[option] = branch
-		}
-	}
-
-	return options, optionMap
-}
-
-// loadWorkflowState loads the workflow state from the state file
-func loadWorkflowState() (WorkflowState, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	stateFile := filepath.Join(homeDir, ".dev_workflow_state.json")
-
-	state := make(WorkflowState)
-	if data, err := os.ReadFile(stateFile); err == nil {
-		// Try to unmarshal as map first (new format)
-		err = json.Unmarshal(data, &state)
-		if err != nil {
-			// If that fails, try to unmarshal as array (old format) for backward compatibility
-			var oldState []WorkflowEntry
-			if err := json.Unmarshal(data, &oldState); err != nil {
-				return nil, err
-			}
-			// Convert old format to new format
-			state = make(WorkflowState)
-			for _, entry := range oldState {
-				state[entry.TicketID] = entry
-			}
-		}
-	}
-	return state, nil
-}
-
 func handleWorkflowCheckout() cli.ActionFunc {
 	token, ok := os.LookupEnv("LINEAR_API_KEY")
 	if !ok {
@@ -99,7 +28,22 @@ func handleWorkflowCheckout() cli.ActionFunc {
 
 		// Check if query looks like a ticket ID (contains dash and numbers)
 		if looksLikeTicketID(query) {
-			return handleTicketWorkflow(client, query)
+			// Load workflow state
+			state, err := loadWorkflowState()
+			if err != nil {
+				return fmt.Errorf("failed to load workflow state: %w", err)
+			}
+
+			// Check if workflow already exists
+			if _, exists := state[query]; exists {
+				// Checkout existing workflow
+				fmt.Printf("Checking out existing workflow for %s...\n", query)
+				return handleWorkflowCheckoutForTicket(query)
+			} else {
+				// Start new workflow
+				fmt.Printf("Starting new workflow for %s...\n", query)
+				return handleWorkflowStart(client, query)
+			}
 		}
 
 		return handleBranchCheckout()
@@ -110,26 +54,6 @@ func handleWorkflowCheckout() cli.ActionFunc {
 func looksLikeTicketID(s string) bool {
 	// Simple heuristic: contains dash and has some numbers
 	return strings.Contains(s, "-") && strings.ContainsAny(s, "0123456789")
-}
-
-// handleTicketWorkflow handles either starting or checking out a workflow for a ticket
-func handleTicketWorkflow(client *linear.Client, ticketID string) error {
-	// Load workflow state
-	state, err := loadWorkflowState()
-	if err != nil {
-		return fmt.Errorf("failed to load workflow state: %w", err)
-	}
-
-	// Check if workflow already exists
-	if _, exists := state[ticketID]; exists {
-		// Checkout existing workflow
-		fmt.Printf("Checking out existing workflow for %s...\n", ticketID)
-		return handleWorkflowCheckoutForTicket(ticketID)
-	} else {
-		// Start new workflow
-		fmt.Printf("Starting new workflow for %s...\n", ticketID)
-		return handleWorkflowStartForTicket(ticketID)
-	}
 }
 
 func handleBranchCheckout() error {
@@ -248,83 +172,6 @@ func handleWorkflowStatus() cli.ActionFunc {
 	}
 }
 
-// handleWorkflowMain handles the main workflow command when no subcommand is provided
-func handleWorkflowMain() cli.ActionFunc {
-	token, ok := os.LookupEnv("LINEAR_API_KEY")
-	if !ok {
-		panic("LINEAR_API_KEY environment variable required")
-	}
-	client := linear.NewClient(token)
-
-	return func(ctx *cli.Context) error {
-		// Query assigned issues from Linear
-		issues, err := client.GetAssignedIssues(ctx.Context)
-		if err != nil {
-			return fmt.Errorf("failed to query assigned issues: %w", err)
-		}
-
-		if len(issues) == 0 {
-			fmt.Println("No issues assigned to you.")
-			return nil
-		}
-
-		// Load current workflow state
-		state, err := loadWorkflowState()
-		if err != nil {
-			return fmt.Errorf("failed to load workflow state: %w", err)
-		}
-
-		// Build options for fuzzy selection
-		var options []string
-		optionMap := make(map[string]linear.Issue)
-
-		for _, issue := range issues {
-			ticketID := string(issue.ID.(string))
-			title := string(issue.Title)
-
-			// Check if this issue already has a workflow
-			var status string
-			if _, exists := state[ticketID]; exists {
-				status = " (in progress)"
-			} else {
-				status = ""
-			}
-
-			option := fmt.Sprintf("🎫 %s: %s%s", ticketID, title, status)
-			options = append(options, option)
-			optionMap[option] = issue
-		}
-
-		// Fuzzy select issue
-		var selected string
-		prompt := &survey.Select{
-			Message:  "Select an issue:",
-			Options:  options,
-			Filter:   contains,
-			PageSize: 16,
-		}
-
-		err = survey.AskOne(prompt, &selected)
-		if err != nil {
-			return fmt.Errorf("failed to prompt for issue selection: %w", err)
-		}
-
-		selectedIssue := optionMap[selected]
-		ticketID := string(selectedIssue.ID.(string))
-
-		// Check if workflow already exists
-		if _, exists := state[ticketID]; exists {
-			// Checkout existing workflow
-			fmt.Printf("Checking out existing workflow for %s...\n", ticketID)
-			return handleWorkflowCheckoutForTicket(ticketID)
-		} else {
-			// Start new workflow
-			fmt.Printf("Starting new workflow for %s...\n", ticketID)
-			return handleWorkflowStartForTicket(ticketID)
-		}
-	}
-}
-
 // handleWorkflowCheckoutForTicket handles checkout for a specific ticket
 func handleWorkflowCheckoutForTicket(ticketID string) error {
 	// Load workflow state
@@ -347,19 +194,10 @@ func handleWorkflowCheckoutForTicket(ticketID string) error {
 			return fmt.Errorf("failed to checkout branch %s: %w", entry.Branch, err)
 		}
 
-		branchExists := false
-		for _, b := range branches {
-			if b == entry.Branch {
-				branchExists = true
-				break
-			}
-		}
-
-		if !branchExists {
+		if !slices.Contains(branches, entry.Branch) {
 			return fmt.Errorf("branch '%s' does not exist. Available branches: %v", entry.Branch, branches)
 		}
 
-		// Branch exists but checkout failed - likely due to uncommitted changes
 		return fmt.Errorf("failed to checkout branch %s (you may have uncommitted changes): %w", entry.Branch, err)
 	}
 
@@ -372,28 +210,20 @@ func handleWorkflowCheckoutForTicket(ticketID string) error {
 	fmt.Printf("Switched to branch: %s\n", entry.Branch)
 	fmt.Printf("Ticket: %s\n", entry.TicketID)
 	fmt.Printf("Status: %s\n", entry.Status)
-	if entry.PrURL != nil {
-		fmt.Printf("PR URL: %s\n", *entry.PrURL)
+	if entry.PrURL != "" {
+		fmt.Printf("PR URL: %s\n", entry.PrURL)
 	}
 
 	return nil
 }
 
-// handleWorkflowStartForTicket handles starting workflow for a specific ticket
-func handleWorkflowStartForTicket(ticketID string) error {
-	token, ok := os.LookupEnv("LINEAR_API_KEY")
-	if !ok {
-		return fmt.Errorf("LINEAR_API_KEY environment variable required")
-	}
-	client := linear.NewClient(token)
-
-	// Get issue details
+// handleWorkflowStart handles starting workflow for a specific ticket
+func handleWorkflowStart(client linear.Client, ticketID string) error {
 	issue, err := client.GetIssue(context.Background(), ticketID)
 	if err != nil {
 		return fmt.Errorf("failed to get issue %s: %w", ticketID, err)
 	}
 
-	// Assign to me
 	viewer, err := client.GetViewer(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to get viewer: %w", err)
@@ -467,7 +297,76 @@ func handleWorkflowStartForTicket(ticketID string) error {
 	return nil
 }
 
-// Utility functions for workflow management
+// Workflow state structures
+type WorkflowEntry struct {
+	TicketID     string    `json:"ticketId"`
+	Branch       string    `json:"branch"`
+	PrURL        string    `json:"prUrl"`
+	Status       string    `json:"status"`
+	Dependencies []string  `json:"dependencies"`
+	LastUpdated  time.Time `json:"lastUpdated"`
+}
+
+type WorkflowState map[string]WorkflowEntry
+
+// buildWorkflowOptions builds the options list and lookup map for workflow entries and branches
+func buildWorkflowOptions(state WorkflowState, branches []string) ([]string, map[string]string) {
+	var options []string
+	optionMap := make(map[string]string)
+
+	// Add workflow state entries first
+	for _, entry := range state {
+		option := fmt.Sprintf("🎫 %s (%s)", entry.Branch, entry.TicketID)
+		options = append(options, option)
+		optionMap[option] = entry.Branch
+	}
+
+	// Add branches that aren't already in state
+	for _, branch := range branches {
+		found := false
+		for _, entry := range state {
+			if entry.Branch == branch {
+				found = true
+				break
+			}
+		}
+		if !found {
+			option := fmt.Sprintf("🌿 %s", branch)
+			options = append(options, option)
+			optionMap[option] = branch
+		}
+	}
+
+	return options, optionMap
+}
+
+// loadWorkflowState loads the workflow state from the state file
+func loadWorkflowState() (WorkflowState, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	stateFile := filepath.Join(homeDir, ".dev_workflow_state.json")
+
+	state := make(WorkflowState)
+	if data, err := os.ReadFile(stateFile); err == nil {
+		// Try to unmarshal as map first (new format)
+		err = json.Unmarshal(data, &state)
+		if err != nil {
+			// If that fails, try to unmarshal as array (old format) for backward compatibility
+			var oldState []WorkflowEntry
+			if err := json.Unmarshal(data, &oldState); err != nil {
+				return nil, err
+			}
+			// Convert old format to new format
+			state = make(WorkflowState)
+			for _, entry := range oldState {
+				state[entry.TicketID] = entry
+			}
+		}
+	}
+	return state, nil
+}
 
 func promptForStash() (bool, error) {
 	var stash bool
