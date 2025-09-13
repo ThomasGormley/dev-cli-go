@@ -1,14 +1,17 @@
 # Worktree Feature Implementation Plan
 
 ## Overview
+
 This document outlines the plan for implementing worktree integration in the `dev` CLI tool to enhance the development workflow with git worktrees and tmux sessions.
 
 ## Current Workflow
+
 - Using `tmux-sessionizer` to manage development environments
 - Existing git aliases for worktree management (`gwtls`, `gwta`, etc.)
 - Need to streamline branch checkout with automatic worktree creation
 
 ## Proposed Workflow
+
 1. `dev checkout` - Shows in-progress linear tickets/branches or creates one
 2. Automatically checks out branch to a worktree in the same parent folder as base repo
 3. If checking out a branch that exists as a tmux session, open that session
@@ -18,6 +21,7 @@ This document outlines the plan for implementing worktree integration in the `de
 ### Phase 1: Basic Branch Checkout with Worktree (MVP)
 
 #### Goals
+
 - Implement `dev checkout <branch>` command
 - Automatically create worktree if it doesn't exist
 - Use simple directory structure in parent folder
@@ -39,6 +43,7 @@ This document outlines the plan for implementing worktree integration in the `de
    - Verify worktree location works with tmux-sessionizer
 
 #### Status
+
 ✅ Implemented `dev checkout <branch>` command
 ✅ Automatically creates worktree if it doesn't exist
 ✅ Uses simple directory structure in parent folder
@@ -49,6 +54,7 @@ This document outlines the plan for implementing worktree integration in the `de
 ### Phase 2: Tmux Session Integration
 
 #### Goals
+
 - Integrate with tmux sessions for seamless workflow
 
 #### Implementation Steps
@@ -64,6 +70,7 @@ This document outlines the plan for implementing worktree integration in the `de
    - Create new session and worktree if needed
 
 #### Status
+
 ✅ Added tmux session creation for worktrees
 ✅ Check for existing tmux sessions
 ✅ Inform user how to attach to session
@@ -71,6 +78,7 @@ This document outlines the plan for implementing worktree integration in the `de
 ### Phase 3: Branch Selection Interface
 
 #### Goals
+
 - Implement interactive branch selection
 - Show in-progress tickets/branches
 
@@ -88,6 +96,7 @@ This document outlines the plan for implementing worktree integration in the `de
 ### Phase 4: Cleanup and Maintenance
 
 #### Goals
+
 - Implement worktree cleanup functionality
 
 #### Implementation Steps
@@ -97,6 +106,7 @@ This document outlines the plan for implementing worktree integration in the `de
    - Automatic cleanup options
 
 ## Directory Structure
+
 ```
 parent/
 ├── repo/              # Main repository
@@ -106,6 +116,7 @@ parent/
 ```
 
 ## Benefits
+
 - Seamless workflow between git worktrees and tmux sessions
 - Reduced context switching
 - Cleaner organization of feature work

@@ -106,3 +106,44 @@ func RemoveWorktree(path string) error {
 	cmd := exec.Command("git", "worktree", "remove", path)
 	return cmd.Run()
 }
+
+// DetectMainBranch returns the name of the main branch (main or master)
+func DetectMainBranch() (string, error) {
+	// Check if main exists
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/main")
+	if cmd.Run() == nil {
+		return "main", nil
+	}
+	// Check if master exists
+	cmd = exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/master")
+	if cmd.Run() == nil {
+		return "master", nil
+	}
+	// Default to main
+	return "main", nil
+}
+
+// Checkout switches to the specified branch
+func Checkout(branch string) error {
+	return exec.Command("git", "checkout", branch).Run()
+}
+
+// Pull fetches and merges changes from the remote
+func Pull() error {
+	return exec.Command("git", "pull").Run()
+}
+
+// CreateBranch creates and switches to a new branch
+func CreateBranch(branch string) error {
+	return exec.Command("git", "checkout", "-b", branch).Run()
+}
+
+// Stash stashes uncommitted changes
+func Stash() error {
+	return exec.Command("git", "stash").Run()
+}
+
+// StashPop pops the most recent stash
+func StashPop() error {
+	return exec.Command("git", "stash", "pop").Run()
+}

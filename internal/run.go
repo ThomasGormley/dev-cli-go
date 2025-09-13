@@ -124,6 +124,18 @@ func Run(
 				},
 				Action: handleCheckout(stdout, stderr),
 			},
+			{
+				Name:    "workflow",
+				Usage:   "Workflow utilities",
+				Aliases: []string{"w"},
+				Subcommands: []*cli.Command{
+					{
+						Name:   "start",
+						Action: handleWorkflowStart(),
+						Args:   true,
+					},
+				},
+			},
 		},
 	}
 
