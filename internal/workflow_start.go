@@ -24,7 +24,7 @@ type WorkflowEntry struct {
 	LastUpdated  time.Time `json:"lastUpdated"`
 }
 
-type WorkflowState []WorkflowEntry
+type WorkflowState map[string]WorkflowEntry
 
 func handleWorkflowStart() cli.ActionFunc {
 	token, ok := os.LookupEnv("LINEAR_API_KEY")
@@ -146,11 +146,21 @@ func storeWorkflowStatus(ticketID, branchName string) error {
 	}
 	stateFile := filepath.Join(homeDir, ".dev_workflow_state.json")
 
-	var state WorkflowState
+	state := make(WorkflowState)
 	if data, err := os.ReadFile(stateFile); err == nil {
+		// Try to unmarshal as map first (new format)
 		err = json.Unmarshal(data, &state)
 		if err != nil {
-			return err
+			// If that fails, try to unmarshal as array (old format) for backward compatibility
+			var oldState []WorkflowEntry
+			if err := json.Unmarshal(data, &oldState); err != nil {
+				return err
+			}
+			// Convert old format to new format
+			state = make(WorkflowState)
+			for _, entry := range oldState {
+				state[entry.TicketID] = entry
+			}
 		}
 	}
 
@@ -162,9 +172,9 @@ func storeWorkflowStatus(ticketID, branchName string) error {
 		Dependencies: []string{},
 		LastUpdated:  time.Now(),
 	}
-	state = append(state, entry)
+	state[ticketID] = entry
 
-	// Write back
+	// Write back (always in new map format)
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err

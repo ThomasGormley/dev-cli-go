@@ -64,11 +64,21 @@ func loadWorkflowState() (WorkflowState, error) {
 	}
 	stateFile := filepath.Join(homeDir, ".dev_workflow_state.json")
 
-	var state WorkflowState
+	state := make(WorkflowState)
 	if data, err := os.ReadFile(stateFile); err == nil {
+		// Try to unmarshal as map first (new format)
 		err = json.Unmarshal(data, &state)
 		if err != nil {
-			return nil, err
+			// If that fails, try to unmarshal as array (old format) for backward compatibility
+			var oldState []WorkflowEntry
+			if err := json.Unmarshal(data, &oldState); err != nil {
+				return nil, err
+			}
+			// Convert old format to new format
+			state = make(WorkflowState)
+			for _, entry := range oldState {
+				state[entry.TicketID] = entry
+			}
 		}
 	}
 	return state, nil
