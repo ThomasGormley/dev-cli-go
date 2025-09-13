@@ -130,17 +130,14 @@ func Run(
 				Aliases: []string{"w"},
 				Subcommands: []*cli.Command{
 					{
-						Name:   "start",
-						Action: handleWorkflowStart(),
-						Args:   true,
-					},
-					{
-						Name:   "switch",
-						Action: handleWorkflowSwitch(),
-						Args:   false, // Optional argument for query prefill
+						Name:   "checkout",
+						Usage:  "Checkout branches or start/manage workflows",
+						Action: handleWorkflowCheckout(),
+						Args:   false, // Optional argument
 					},
 					{
 						Name:   "status",
+						Usage:  "Show workflow status",
 						Action: handleWorkflowStatus(),
 					},
 				},

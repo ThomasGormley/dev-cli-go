@@ -34,6 +34,7 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // GraphQL types for Linear API
 type Issue struct {
 	ID          graphql.ID     `graphql:"id"`
+	Identifier  graphql.ID     `graphql:"identifier"`
 	Title       graphql.String `graphql:"title"`
 	Description graphql.String `graphql:"description"`
 	Assignee    User           `graphql:"assignee"`
@@ -111,4 +112,23 @@ func (c *Client) AssignIssue(ctx context.Context, id string, assigneeID string) 
 		},
 	}
 	return c.client.Mutate(ctx, &m, variables)
+}
+
+// Query struct for getting issues assigned to current user
+type AssignedIssuesQuery struct {
+	Viewer struct {
+		AssignedIssues struct {
+			Nodes []Issue `graphql:"nodes"`
+		} `graphql:"assignedIssues"`
+	} `graphql:"viewer"`
+}
+
+// RPC-style method to get issues assigned to current user
+func (c *Client) GetAssignedIssues(ctx context.Context) ([]Issue, error) {
+	var q AssignedIssuesQuery
+	err := c.client.Query(ctx, &q, nil)
+	if err != nil {
+		return nil, err
+	}
+	return q.Viewer.AssignedIssues.Nodes, nil
 }
