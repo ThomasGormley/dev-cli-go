@@ -35,7 +35,7 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // GraphQL types for Linear API
 type Issue struct {
 	ID          graphql.ID     `graphql:"id"`
-	Identifier  graphql.ID     `graphql:"identifier"`
+	Identifier  graphql.String `graphql:"identifier"`
 	Title       graphql.String `graphql:"title"`
 	Description graphql.String `graphql:"description"`
 	Assignee    User           `graphql:"assignee"`

@@ -13,6 +13,16 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+// CHECKOUT
+// - fzf all assigned tickets
+//
+// CHECKOUT <arg:ID>
+// - checkout existing ID
+// - start new id
+//
+// COMPLETE
+// - fzf all workflow entries
+
 func handleWorkflowCheckout() cli.ActionFunc {
 	apiKey, foundKey := os.LookupEnv("LINEAR_API_KEY")
 	if !foundKey {
@@ -39,17 +49,16 @@ func handleWorkflowCheckout() cli.ActionFunc {
 				}
 				branch := string(issue.BranchName)
 
-				err = promptForSafeCheckout(branch)
-				if err != nil {
-					return fmt.Errorf("failed to checkout: %+v", err)
+				entry = WorkflowEntry{
+					TicketID: string(issue.Identifier),
+					Branch:   branch,
+					Status:   "in-progress",
 				}
 
-				err = storeWorkflowStatus(arg, branch)
-				if err != nil {
+				if err = upsertWorkflowEntry(entry); err != nil {
 					return err
 				}
-				fmt.Printf("Started workflow for ticket %s on branch %s\n", arg, branch)
-				return nil
+
 			}
 
 			err = promptForSafeCheckout(entry.Branch)
@@ -69,7 +78,6 @@ func handleWorkflowCheckout() cli.ActionFunc {
 			if entry.PrURL != "" {
 				fmt.Printf("PR URL: %s\n", entry.PrURL)
 			}
-
 		}
 
 		state, err := loadWorkflowState()
@@ -77,31 +85,44 @@ func handleWorkflowCheckout() cli.ActionFunc {
 			return fmt.Errorf("failed to load workflow state: %w", err)
 		}
 
-		// Build options and lookup map
-		options, optionMap := buildWorkflowOptions(state)
+		var options []string
+		optionMap := make(map[string]string)
+		for _, entry := range state {
+			option := fmt.Sprintf("🎫 %s (%s)", entry.Branch, entry.TicketID)
+			options = append(options, option)
+			optionMap[option] = entry.TicketID
+		}
 
 		if len(options) == 0 {
 			return fmt.Errorf("no branches or workflow entries found")
 		}
 
-		var selected string
+		var selectedOpt string
 		prompt := &survey.Select{
 			Message:  "Choose a branch:",
 			Options:  options,
 			PageSize: 16,
 		}
 
-		err = survey.AskOne(prompt, &selected)
+		err = survey.AskOne(prompt, &selectedOpt)
 		if err != nil {
 			return fmt.Errorf("failed to prompt for selection: %w", err)
 		}
 
-		branch, exists := optionMap[selected]
+		selectedTicketID, exists := optionMap[selectedOpt]
 		if !exists {
 			return fmt.Errorf("selected option not found in lookup")
 		}
 
-		err = promptForSafeCheckout(branch)
+		selected, found, err := workflowStateForTicketID(selectedTicketID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("ticket %s not found in entries", selectedTicketID)
+		}
+
+		err = promptForSafeCheckout(selected.Branch)
 		if err != nil {
 			return err
 		}
@@ -112,26 +133,11 @@ func handleWorkflowCheckout() cli.ActionFunc {
 			fmt.Printf("Warning: failed to pull latest changes: %v\n", err)
 		}
 
-		// Find and display ticket details
-		var ticketEntry WorkflowEntry
-		found := false
-		for _, entry := range state {
-			if entry.Branch == branch {
-				ticketEntry = entry
-				found = true
-				break
-			}
-		}
-
-		if found {
-			fmt.Printf("Switched to branch: %s\n", branch)
-			fmt.Printf("Ticket: %s\n", ticketEntry.TicketID)
-			fmt.Printf("Status: %s\n", ticketEntry.Status)
-			if ticketEntry.PrURL != "" {
-				fmt.Printf("PR URL: %s\n", ticketEntry.PrURL)
-			}
-		} else {
-			fmt.Printf("Switched to branch: %s\n", branch)
+		fmt.Printf("Switched to branch: %s\n", selected.Branch)
+		fmt.Printf("Ticket: %s\n", selected.TicketID)
+		fmt.Printf("Status: %s\n", selected.Status)
+		if selected.PrURL != "" {
+			fmt.Printf("PR URL: %s\n", selected.PrURL)
 		}
 
 		return nil

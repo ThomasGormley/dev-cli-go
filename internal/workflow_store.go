@@ -48,7 +48,7 @@ func loadWorkflowState() (WorkflowState, error) {
 	return state, nil
 }
 
-func storeWorkflowStatus(ticketID, branchName string) error {
+func upsertWorkflowEntry(wfe WorkflowEntry) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -56,35 +56,26 @@ func storeWorkflowStatus(ticketID, branchName string) error {
 	stateFile := filepath.Join(homeDir, ".dev_workflow_state.json")
 
 	state := make(WorkflowState)
-	if data, err := os.ReadFile(stateFile); err == nil {
-		// Try to unmarshal as map first (new format)
-		err = json.Unmarshal(data, &state)
-		if err != nil {
-			// If that fails, try to unmarshal as array (old format) for backward compatibility
-			var oldState []WorkflowEntry
-			if err := json.Unmarshal(data, &oldState); err != nil {
-				return err
-			}
-			// Convert old format to new format
-			state = make(WorkflowState)
-			for _, entry := range oldState {
-				state[entry.TicketID] = entry
-			}
-		}
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		return err
+	}
+	if err = json.Unmarshal(data, &state); err != nil {
+		return err
 	}
 
 	// Add new entry
 	entry := WorkflowEntry{
-		TicketID:     ticketID,
-		Branch:       branchName,
-		Status:       "in-progress",
+		TicketID:     wfe.TicketID,
+		Branch:       wfe.Branch,
+		Status:       wfe.Status,
 		Dependencies: []string{},
 		LastUpdated:  time.Now(),
 	}
-	state[ticketID] = entry
+	state[entry.TicketID] = entry
 
 	// Write back (always in new map format)
-	data, err := json.MarshalIndent(state, "", "  ")
+	data, err = json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
