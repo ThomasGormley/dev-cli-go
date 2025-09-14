@@ -35,8 +35,11 @@ func handleWorkflowCheckout() cli.ActionFunc {
 			return errors.New("LINEAR_API_KEY missing")
 		}
 
-		var selectedWorkflow WorkflowEntry
-		var err error
+		var (
+			selectedWorkflow WorkflowEntry
+			err              error
+		)
+
 		if arg := ctx.Args().First(); looksLikeTicketID(arg) {
 			// Attempt to checkout an existing workflow
 			selectedWorkflow, existingWorkflow, err := workflowStateForTicketID(arg)
@@ -69,11 +72,8 @@ func handleWorkflowCheckout() cli.ActionFunc {
 			}
 		}
 
-		if err = promptForSafeCheckout(selectedWorkflow.Branch); err != nil {
+		if err = safeCheckout(selectedWorkflow.Branch); err != nil {
 			return err
-		}
-		if err = git.Pull(); err != nil {
-			fmt.Printf("Warning: failed to pull latest changes: %v\n", err)
 		}
 
 		fmt.Printf("Switched to branch: %s\n", selectedWorkflow.Branch)
@@ -170,75 +170,39 @@ func workflowStateForTicketID(id string) (WorkflowEntry, bool, error) {
 	return entry, true, nil
 }
 
-func promptForSafeCheckout(branchName string) error {
+func safeCheckout(branchName string) error {
 	hasChanges, err := git.HasUncommittedChanges()
 	if err != nil {
 		return fmt.Errorf("failed to check for uncommitted changes: %w", err)
 	}
 	didStash := false
 	if hasChanges {
-		stash, err := promptForStash()
-		if err != nil {
-			return fmt.Errorf("failed to prompt for stashing changes: %w", err)
+		if err = git.Stash(); err != nil {
+			return fmt.Errorf("failed to stash changes: %w", err)
 		}
-		if stash {
-			err = git.Stash()
-			if err != nil {
-				return fmt.Errorf("failed to stash changes: %w", err)
-			}
-			didStash = true
-		}
+		didStash = true
 	}
 
 	mainBranch, err := git.DetectMainBranch()
 	if err != nil {
 		return fmt.Errorf("failed to detect main branch: %w", err)
 	}
-	err = git.Checkout(mainBranch)
-	if err != nil {
+
+	if err = git.Checkout(mainBranch); err != nil {
 		return fmt.Errorf("failed to checkout %s branch: %w", mainBranch, err)
 	}
-
-	err = git.Pull()
-	if err != nil {
+	if err = git.Pull(); err != nil {
 		return fmt.Errorf("failed to pull latest changes: %w", err)
 	}
-
-	err = git.CreateBranch(branchName)
-	if err != nil {
+	if err = git.CreateBranch(branchName); err != nil {
 		return fmt.Errorf("failed to create branch %s: %w", branchName, err)
 	}
 
 	if didStash {
-		pop, err := promptForPop()
-		if err != nil {
-			return fmt.Errorf("failed to prompt for popping stash: %w", err)
-		}
-		if pop {
-			err = git.StashPop()
-			if err != nil {
-				return fmt.Errorf("failed to pop stashed changes: %w", err)
-			}
+		if err = git.StashPop(); err != nil {
+			return fmt.Errorf("failed to pop stashed changes: %w", err)
 		}
 	}
 
 	return nil
-}
-
-func promptForStash() (bool, error) {
-	var stash bool
-	prompt := &survey.Confirm{
-		Message: "You have uncommitted changes. Stash them?",
-	}
-	err := survey.AskOne(prompt, &stash)
-	return stash, err
-}
-
-func promptForPop() (bool, error) {
-	var pop bool
-	prompt := &survey.Confirm{
-		Message: "Pop the stashed changes onto the new branch?",
-	}
-	err := survey.AskOne(prompt, &pop)
-	return pop, err
 }
