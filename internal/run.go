@@ -124,7 +124,7 @@ func Run(
 						Args:    false, // Optional argument
 					},
 					{
-						Name:   "checkout",
+						Name:   "complete",
 						Usage:  "Checkout branches or start/manage workflows",
 						Action: handleWorkflowComplete(),
 						Args:   false, // Optional argument
