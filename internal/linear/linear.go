@@ -144,6 +144,20 @@ func (c *Client) AssignIssue(ctx context.Context, id string, assigneeID string) 
 	return c.client.Mutate(ctx, &m, variables)
 }
 
+// RPC-style method to update issue state
+func (c *Client) UpdateIssueState(ctx context.Context, id string, stateID string) error {
+	var m struct {
+		IssueUpdate IssuePayload `graphql:"issueUpdate(id: $id, input: $input)"`
+	}
+	variables := map[string]any{
+		"id": graphql.String(id),
+		"input": IssueUpdateInput{
+			StateID: graphql.ID(stateID),
+		},
+	}
+	return c.client.Mutate(ctx, &m, variables)
+}
+
 // Query struct for getting issues assigned to current user
 type AssignedIssuesQuery struct {
 	Viewer struct {

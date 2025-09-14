@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/thomasgormley/dev-cli-go/internal/git"
+	"github.com/thomasgormley/dev-cli-go/internal/linear"
 	"github.com/urfave/cli/v2"
 )
 
@@ -89,10 +93,45 @@ func handleWorkflowComplete() cli.ActionFunc {
 			return nil
 		}
 
+		// Check Linear status
+		apiKey := os.Getenv("LINEAR_API_KEY")
+		if apiKey == "" {
+			return errors.New("LINEAR_API_KEY not set")
+		}
+		client := linear.NewClient(apiKey)
+		issue, err := client.GetIssue(context.Background(), wf.TicketID)
+		if err != nil {
+			return fmt.Errorf("failed to get issue: %w", err)
+		}
+		if string(issue.State.Name) != "Done" {
+			if promptForMoveToDone(wf.TicketID) {
+				teamID := issue.Team.ID.(string)
+				states, err := client.GetWorkflowStates(context.Background(), teamID)
+				if err != nil {
+					return fmt.Errorf("failed to get workflow states: %w", err)
+				}
+				var doneID string
+				for _, state := range states {
+					if string(state.Name) == "Done" {
+						doneID = state.ID.(string)
+						break
+					}
+				}
+				if doneID == "" {
+					return errors.New("done state not found")
+				}
+				err = client.UpdateIssueState(context.Background(), wf.TicketID, doneID)
+				if err != nil {
+					return fmt.Errorf("failed to update issue state: %w", err)
+				}
+			}
+		}
+
 		if err = deleteWorkflowState(wf.TicketID); err != nil {
 			return fmt.Errorf("failed to delete workflow state: %w", err)
 		}
 
+		fmt.Printf("Successfully completed workflow for %s\n", branch)
 		return nil
 	}
 }
@@ -113,4 +152,13 @@ func promptForDeleteBranchWithUnpushed(branch string) bool {
 		&deleteBranch,
 	)
 	return deleteBranch
+}
+
+func promptForMoveToDone(ticketID string) bool {
+	var moveToDone bool
+	survey.AskOne(
+		&survey.Confirm{Message: fmt.Sprintf("Issue %s is not in 'Done' state. Move to 'Done'?", ticketID)},
+		&moveToDone,
+	)
+	return moveToDone
 }
