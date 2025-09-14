@@ -112,28 +112,21 @@ func Run(
 				Action: handleTest(stdout, stderr),
 			},
 			{
-				Name:    "checkout",
-				Usage:   "Checkout branches with automatic worktree creation",
-				Aliases: []string{"co"},
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:    "branch",
-						Usage:   "branch to checkout",
-						Aliases: []string{"b"},
-					},
-				},
-				Action: handleCheckout(stdout, stderr),
-			},
-<<<<<<< HEAD
-			{
 				Name:    "workflow",
 				Usage:   "Workflow utilities",
 				Aliases: []string{"w"},
 				Subcommands: []*cli.Command{
 					{
+						Name:    "checkout",
+						Usage:   "Checkout branches or start/manage workflows",
+						Action:  handleWorkflowCheckout(),
+						Aliases: []string{"co"},
+						Args:    false, // Optional argument
+					},
+					{
 						Name:   "checkout",
 						Usage:  "Checkout branches or start/manage workflows",
-						Action: handleWorkflowCheckout(),
+						Action: handleWorkflowComplete(),
 						Args:   false, // Optional argument
 					},
 					{
@@ -143,8 +136,6 @@ func Run(
 					},
 				},
 			},
-=======
->>>>>>> aa4da08 (Implement basic branch checkout with worktree creation)
 		},
 	}
 
