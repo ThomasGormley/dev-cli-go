@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // IsRepo checks if the current directory is inside a git repository
@@ -17,7 +18,7 @@ func CurrentBranch() (string, error) {
 	cmd := exec.Command("git", "branch", "--show-current")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("getting current branch: +v", err)
+		return "", fmt.Errorf("getting current branch: %v", err)
 	}
 	return string(bytes.TrimSpace(out)), nil
 }
@@ -172,4 +173,14 @@ func ListBranches() ([]string, error) {
 		}
 	}
 	return result, nil
+}
+
+// HasUnpushedCommits checks if the branch has commits not pushed to origin
+func HasUnpushedCommits(branch string) (bool, error) {
+	cmd := exec.Command("git", "log", "--oneline", fmt.Sprintf("origin/%s..%s", branch, branch))
+	out, err := cmd.Output()
+	if err != nil {
+		return true, nil // assume has unpushed if can't check (e.g., no remote branch)
+	}
+	return len(strings.TrimSpace(string(out))) > 0, nil
 }
