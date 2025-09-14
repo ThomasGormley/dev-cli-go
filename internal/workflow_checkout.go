@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -26,28 +25,131 @@ func handleWorkflowCheckout() cli.ActionFunc {
 	return func(ctx *cli.Context) error {
 		query := ctx.Args().First()
 
-		// Check if query looks like a ticket ID (contains dash and numbers)
 		if looksLikeTicketID(query) {
-			// Load workflow state
-			state, err := loadWorkflowState()
+			// Attempt to checkout an existing workflow
+			entry, existingWorkflow, err := workflowStateForTicketID(query)
 			if err != nil {
-				return fmt.Errorf("failed to load workflow state: %w", err)
+				return err
 			}
 
-			// Check if workflow already exists
-			if _, exists := state[query]; exists {
-				// Checkout existing workflow
-				fmt.Printf("Checking out existing workflow for %s...\n", query)
-				return handleWorkflowCheckoutForTicket(query)
-			} else {
-				// Start new workflow
-				fmt.Printf("Starting new workflow for %s...\n", query)
-				return handleWorkflowStart(client, query)
+			if !existingWorkflow {
+				issue, err := assignIssue(client, query)
+				branch := string(issue.BranchName)
+
+				err = promptForSafeCheckout(branch)
+				if err != nil {
+					return err
+				}
+
+				err = storeWorkflowStatus(query, branch)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Started workflow for ticket %s on branch %s\n", query, branch)
+				return nil
+			}
+
+			err = promptForSafeCheckout(entry.Branch)
+			if err != nil {
+				return err
+			}
+
+			// Pull latest
+			err = git.Pull()
+			if err != nil {
+				fmt.Printf("Warning: failed to pull latest changes: %v\n", err)
+			}
+
+			fmt.Printf("Switched to branch: %s\n", entry.Branch)
+			fmt.Printf("Ticket: %s\n", entry.TicketID)
+			fmt.Printf("Status: %s\n", entry.Status)
+			if entry.PrURL != "" {
+				fmt.Printf("PR URL: %s\n", entry.PrURL)
+			}
+
+		}
+
+		state, err := loadWorkflowState()
+		if err != nil {
+			return fmt.Errorf("failed to load workflow state: %w", err)
+		}
+
+		// Build options and lookup map
+		options, optionMap := buildWorkflowOptions(state)
+
+		if len(options) == 0 {
+			return fmt.Errorf("no branches or workflow entries found")
+		}
+
+		var selected string
+		prompt := &survey.Select{
+			Message:  "Choose a branch:",
+			Options:  options,
+			PageSize: 16,
+		}
+
+		err = survey.AskOne(prompt, &selected)
+		if err != nil {
+			return fmt.Errorf("failed to prompt for selection: %w", err)
+		}
+
+		branch, exists := optionMap[selected]
+		if !exists {
+			return fmt.Errorf("selected option not found in lookup")
+		}
+
+		err = promptForSafeCheckout(branch)
+		if err != nil {
+			return err
+		}
+
+		// Pull latest
+		err = git.Pull()
+		if err != nil {
+			fmt.Printf("Warning: failed to pull latest changes: %v\n", err)
+		}
+
+		// Find and display ticket details
+		var ticketEntry WorkflowEntry
+		found := false
+		for _, entry := range state {
+			if entry.Branch == branch {
+				ticketEntry = entry
+				found = true
+				break
 			}
 		}
 
-		return handleBranchCheckout()
+		if found {
+			fmt.Printf("Switched to branch: %s\n", branch)
+			fmt.Printf("Ticket: %s\n", ticketEntry.TicketID)
+			fmt.Printf("Status: %s\n", ticketEntry.Status)
+			if ticketEntry.PrURL != "" {
+				fmt.Printf("PR URL: %s\n", ticketEntry.PrURL)
+			}
+		} else {
+			fmt.Printf("Switched to branch: %s\n", branch)
+		}
+
+		return nil
 	}
+}
+
+func assignIssue(client linear.Client, query string) (linear.Issue, error) {
+	issue, err := client.GetIssue(context.Background(), query)
+	if err != nil {
+		return linear.Issue{}, fmt.Errorf("failed to get issue %s: %w", query, err)
+	}
+
+	viewer, err := client.GetViewer(context.Background())
+	if err != nil {
+		return linear.Issue{}, fmt.Errorf("failed to get viewer: %w", err)
+	}
+	err = client.AssignIssue(context.Background(), query, fmt.Sprintf("%v", viewer.ID))
+	if err != nil {
+		return linear.Issue{}, fmt.Errorf("failed to assign issue: %w", err)
+	}
+	return issue, err
 }
 
 // looksLikeTicketID checks if a string resembles a ticket ID pattern
@@ -56,186 +158,22 @@ func looksLikeTicketID(s string) bool {
 	return strings.Contains(s, "-") && strings.ContainsAny(s, "0123456789")
 }
 
-func handleBranchCheckout() error {
+func workflowStateForTicketID(id string) (WorkflowEntry, bool, error) {
 	// Load workflow state
 	state, err := loadWorkflowState()
 	if err != nil {
-		return fmt.Errorf("failed to load workflow state: %w", err)
+		return WorkflowEntry{}, false, fmt.Errorf("failed to load workflow state: %w", err)
 	}
 
-	branches, err := git.ListBranches()
-	if err != nil {
-		return fmt.Errorf("failed to list branches: %w", err)
-	}
-
-	// Build options and lookup map
-	options, optionMap := buildWorkflowOptions(state, branches)
-
-	if len(options) == 0 {
-		return fmt.Errorf("no branches or workflow entries found")
-	}
-
-	var selected string
-	prompt := &survey.Select{
-		Message:  "Choose a branch:",
-		Options:  options,
-		PageSize: 16,
-	}
-
-	err = survey.AskOne(prompt, &selected)
-	if err != nil {
-		return fmt.Errorf("failed to prompt for selection: %w", err)
-	}
-
-	branch, exists := optionMap[selected]
+	entry, exists := state[id]
 	if !exists {
-		return fmt.Errorf("selected option not found in lookup")
+		return WorkflowEntry{}, false, nil
 	}
 
-	// Checkout the branch
-	err = git.Checkout(branch)
-	if err != nil {
-		// Check if branch exists
-		branches, branchErr := git.ListBranches()
-		if branchErr != nil {
-			return fmt.Errorf("failed to checkout branch %s: %w", branch, err)
-		}
-
-		if branchExists := slices.Contains(branches, branch); !branchExists {
-			return fmt.Errorf("branch '%s' does not exist. Available branches: %v", branch, branches)
-		}
-
-		// Branch exists but checkout failed - likely due to uncommitted changes
-		return fmt.Errorf("failed to checkout branch %s (you may have uncommitted changes): %w", branch, err)
-	}
-
-	// Pull latest
-	err = git.Pull()
-	if err != nil {
-		fmt.Printf("Warning: failed to pull latest changes: %v\n", err)
-	}
-
-	// Find and display ticket details
-	var ticketEntry WorkflowEntry
-	found := false
-	for _, entry := range state {
-		if entry.Branch == branch {
-			ticketEntry = entry
-			found = true
-			break
-		}
-	}
-
-	if found {
-		fmt.Printf("Switched to branch: %s\n", branch)
-		fmt.Printf("Ticket: %s\n", ticketEntry.TicketID)
-		fmt.Printf("Status: %s\n", ticketEntry.Status)
-		if ticketEntry.PrURL != "" {
-			fmt.Printf("PR URL: %s\n", ticketEntry.PrURL)
-		}
-	} else {
-		fmt.Printf("Switched to branch: %s\n", branch)
-	}
-
-	return nil
+	return entry, true, nil
 }
 
-func handleWorkflowStatus() cli.ActionFunc {
-	return func(ctx *cli.Context) error {
-		state, err := loadWorkflowState()
-		if err != nil {
-			return fmt.Errorf("failed to load workflow state: %w", err)
-		}
-
-		if len(state) == 0 {
-			fmt.Println("No workflow entries found.")
-			return nil
-		}
-
-		fmt.Printf("%-12s %-30s %-12s %-20s %s\n", "Ticket ID", "Branch", "Status", "PR URL", "Last Updated")
-		fmt.Println(strings.Repeat("-", 100))
-
-		for _, entry := range state {
-			prURL := ""
-			if entry.PrURL != "" {
-				prURL = entry.PrURL
-			}
-			fmt.Printf("%-12s %-30s %-12s %-20s %s\n",
-				entry.TicketID,
-				entry.Branch,
-				entry.Status,
-				prURL,
-				entry.LastUpdated.Format("2006-01-02 15:04"))
-		}
-
-		return nil
-	}
-}
-
-// handleWorkflowCheckoutForTicket handles checkout for a specific ticket
-func handleWorkflowCheckoutForTicket(ticketID string) error {
-	// Load workflow state
-	state, err := loadWorkflowState()
-	if err != nil {
-		return fmt.Errorf("failed to load workflow state: %w", err)
-	}
-
-	entry, exists := state[ticketID]
-	if !exists {
-		return fmt.Errorf("no workflow found for ticket %s", ticketID)
-	}
-
-	// Checkout the branch
-	err = git.Checkout(entry.Branch)
-	if err != nil {
-		// Check if branch exists
-		branches, branchErr := git.ListBranches()
-		if branchErr != nil {
-			return fmt.Errorf("failed to checkout branch %s: %w", entry.Branch, err)
-		}
-
-		if !slices.Contains(branches, entry.Branch) {
-			return fmt.Errorf("branch '%s' does not exist. Available branches: %v", entry.Branch, branches)
-		}
-
-		return fmt.Errorf("failed to checkout branch %s (you may have uncommitted changes): %w", entry.Branch, err)
-	}
-
-	// Pull latest
-	err = git.Pull()
-	if err != nil {
-		fmt.Printf("Warning: failed to pull latest changes: %v\n", err)
-	}
-
-	fmt.Printf("Switched to branch: %s\n", entry.Branch)
-	fmt.Printf("Ticket: %s\n", entry.TicketID)
-	fmt.Printf("Status: %s\n", entry.Status)
-	if entry.PrURL != "" {
-		fmt.Printf("PR URL: %s\n", entry.PrURL)
-	}
-
-	return nil
-}
-
-// handleWorkflowStart handles starting workflow for a specific ticket
-func handleWorkflowStart(client linear.Client, ticketID string) error {
-	issue, err := client.GetIssue(context.Background(), ticketID)
-	if err != nil {
-		return fmt.Errorf("failed to get issue %s: %w", ticketID, err)
-	}
-
-	viewer, err := client.GetViewer(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to get viewer: %w", err)
-	}
-	err = client.AssignIssue(context.Background(), ticketID, fmt.Sprintf("%v", viewer.ID))
-	if err != nil {
-		return fmt.Errorf("failed to assign issue: %w", err)
-	}
-
-	branchName := string(issue.BranchName)
-
-	// Defensive checkout
+func promptForSafeCheckout(branchName string) error {
 	hasChanges, err := git.HasUncommittedChanges()
 	if err != nil {
 		return err
@@ -287,13 +225,6 @@ func handleWorkflowStart(client linear.Client, ticketID string) error {
 		}
 	}
 
-	err = storeWorkflowStatus(ticketID, branchName)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Started workflow for ticket %s on branch %s\n", ticketID, branchName)
-
 	return nil
 }
 
@@ -310,7 +241,7 @@ type WorkflowEntry struct {
 type WorkflowState map[string]WorkflowEntry
 
 // buildWorkflowOptions builds the options list and lookup map for workflow entries and branches
-func buildWorkflowOptions(state WorkflowState, branches []string) ([]string, map[string]string) {
+func buildWorkflowOptions(state WorkflowState) ([]string, map[string]string) {
 	var options []string
 	optionMap := make(map[string]string)
 
@@ -319,22 +250,6 @@ func buildWorkflowOptions(state WorkflowState, branches []string) ([]string, map
 		option := fmt.Sprintf("🎫 %s (%s)", entry.Branch, entry.TicketID)
 		options = append(options, option)
 		optionMap[option] = entry.Branch
-	}
-
-	// Add branches that aren't already in state
-	for _, branch := range branches {
-		found := false
-		for _, entry := range state {
-			if entry.Branch == branch {
-				found = true
-				break
-			}
-		}
-		if !found {
-			option := fmt.Sprintf("🌿 %s", branch)
-			options = append(options, option)
-			optionMap[option] = branch
-		}
 	}
 
 	return options, optionMap
