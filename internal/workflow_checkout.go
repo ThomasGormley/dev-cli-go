@@ -35,9 +35,11 @@ func handleWorkflowCheckout() cli.ActionFunc {
 			return errors.New("LINEAR_API_KEY missing")
 		}
 
+		var selectedWorkflow WorkflowEntry
+		var err error
 		if arg := ctx.Args().First(); looksLikeTicketID(arg) {
 			// Attempt to checkout an existing workflow
-			entry, existingWorkflow, err := workflowStateForTicketID(arg)
+			selectedWorkflow, existingWorkflow, err := workflowStateForTicketID(arg)
 			if err != nil {
 				return err
 			}
@@ -49,99 +51,85 @@ func handleWorkflowCheckout() cli.ActionFunc {
 				}
 				branch := string(issue.BranchName)
 
-				entry = WorkflowEntry{
+				selectedWorkflow = WorkflowEntry{
 					TicketID: string(issue.Identifier),
 					Branch:   branch,
 					Status:   "in-progress",
 				}
 
-				if err = upsertWorkflowEntry(entry); err != nil {
+				if err = upsertWorkflowEntry(selectedWorkflow); err != nil {
 					return err
 				}
-
 			}
-
-			err = promptForSafeCheckout(entry.Branch)
+			return nil
+		} else {
+			selectedWorkflow, err = promptForWorkflowEntry()
 			if err != nil {
 				return err
 			}
-
-			// Pull latest
-			err = git.Pull()
-			if err != nil {
-				fmt.Printf("Warning: failed to pull latest changes: %v\n", err)
-			}
-
-			fmt.Printf("Switched to branch: %s\n", entry.Branch)
-			fmt.Printf("Ticket: %s\n", entry.TicketID)
-			fmt.Printf("Status: %s\n", entry.Status)
-			if entry.PrURL != "" {
-				fmt.Printf("PR URL: %s\n", entry.PrURL)
-			}
 		}
 
-		state, err := loadWorkflowState()
-		if err != nil {
-			return fmt.Errorf("failed to load workflow state: %w", err)
-		}
-
-		var options []string
-		optionMap := make(map[string]string)
-		for _, entry := range state {
-			option := fmt.Sprintf("🎫 %s (%s)", entry.Branch, entry.TicketID)
-			options = append(options, option)
-			optionMap[option] = entry.TicketID
-		}
-
-		if len(options) == 0 {
-			return fmt.Errorf("no branches or workflow entries found")
-		}
-
-		var selectedOpt string
-		prompt := &survey.Select{
-			Message:  "Choose a branch:",
-			Options:  options,
-			PageSize: 16,
-		}
-
-		err = survey.AskOne(prompt, &selectedOpt)
-		if err != nil {
-			return fmt.Errorf("failed to prompt for selection: %w", err)
-		}
-
-		selectedTicketID, exists := optionMap[selectedOpt]
-		if !exists {
-			return fmt.Errorf("selected option not found in lookup")
-		}
-
-		selected, found, err := workflowStateForTicketID(selectedTicketID)
-		if err != nil {
+		if err = promptForSafeCheckout(selectedWorkflow.Branch); err != nil {
 			return err
 		}
-		if !found {
-			return fmt.Errorf("ticket %s not found in entries", selectedTicketID)
-		}
-
-		err = promptForSafeCheckout(selected.Branch)
-		if err != nil {
-			return err
-		}
-
-		// Pull latest
-		err = git.Pull()
-		if err != nil {
+		if err = git.Pull(); err != nil {
 			fmt.Printf("Warning: failed to pull latest changes: %v\n", err)
 		}
 
-		fmt.Printf("Switched to branch: %s\n", selected.Branch)
-		fmt.Printf("Ticket: %s\n", selected.TicketID)
-		fmt.Printf("Status: %s\n", selected.Status)
-		if selected.PrURL != "" {
-			fmt.Printf("PR URL: %s\n", selected.PrURL)
+		fmt.Printf("Switched to branch: %s\n", selectedWorkflow.Branch)
+		fmt.Printf("Ticket: %s\n", selectedWorkflow.TicketID)
+		fmt.Printf("Status: %s\n", selectedWorkflow.Status)
+		if selectedWorkflow.PrURL != "" {
+			fmt.Printf("PR URL: %s\n", selectedWorkflow.PrURL)
 		}
 
 		return nil
 	}
+}
+
+func promptForWorkflowEntry() (WorkflowEntry, error) {
+	state, err := loadWorkflowState()
+	if err != nil {
+		return WorkflowEntry{}, fmt.Errorf("failed to load workflow state: %w", err)
+	}
+
+	var options []string
+	optionMap := make(map[string]string)
+	for _, entry := range state {
+		option := fmt.Sprintf("🎫 %s (%s)", entry.Branch, entry.TicketID)
+		options = append(options, option)
+		optionMap[option] = entry.TicketID
+	}
+
+	if len(options) == 0 {
+		return WorkflowEntry{}, fmt.Errorf("no branches or workflow entries found")
+	}
+
+	var selectedOpt string
+	prompt := &survey.Select{
+		Message:  "Choose a branch:",
+		Options:  options,
+		PageSize: 16,
+	}
+
+	err = survey.AskOne(prompt, &selectedOpt)
+	if err != nil {
+		return WorkflowEntry{}, fmt.Errorf("failed to prompt for selection: %w", err)
+	}
+
+	selectedTicketID, exists := optionMap[selectedOpt]
+	if !exists {
+		return WorkflowEntry{}, fmt.Errorf("selected option not found in lookup")
+	}
+
+	selected, found, err := workflowStateForTicketID(selectedTicketID)
+	if err != nil {
+		return WorkflowEntry{}, err
+	}
+	if !found {
+		return WorkflowEntry{}, fmt.Errorf("ticket %s not found in entries", selectedTicketID)
+	}
+	return selected, err
 }
 
 func assignIssue(client linear.Client, query string) (linear.Issue, error) {
