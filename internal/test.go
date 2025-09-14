@@ -164,8 +164,8 @@ func runSelectedTest(ctx *cli.Context, goTest goTest, selectedTest TestInfo) err
 }
 
 func contains(filterValue string, optValue string, optIndex int) bool {
-	// only include the option if it includes the filter
-	return strings.Contains(optValue, filterValue)
+	// only include the option if it includes the filter (case insensitive)
+	return strings.Contains(strings.ToLower(optValue), strings.ToLower(filterValue))
 }
 
 func ListTests(reader io.Reader) ([]TestInfo, error) {
