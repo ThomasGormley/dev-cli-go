@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,24 +17,26 @@ import (
 )
 
 func handleWorkflowCheckout() cli.ActionFunc {
-	token, ok := os.LookupEnv("LINEAR_API_KEY")
-	if !ok {
-		panic("LINEAR_API_KEY environment variable required")
+	apiKey, foundKey := os.LookupEnv("LINEAR_API_KEY")
+	if !foundKey {
+		fmt.Println("WARNING: LINEAR_API_KEY not set")
 	}
-	client := linear.NewClient(token)
+	client := linear.NewClient(apiKey)
 
 	return func(ctx *cli.Context) error {
-		query := ctx.Args().First()
+		if !foundKey || apiKey == "" {
+			return errors.New("LINEAR_API_KEY missing")
+		}
 
-		if looksLikeTicketID(query) {
+		if arg := ctx.Args().First(); looksLikeTicketID(arg) {
 			// Attempt to checkout an existing workflow
-			entry, existingWorkflow, err := workflowStateForTicketID(query)
+			entry, existingWorkflow, err := workflowStateForTicketID(arg)
 			if err != nil {
 				return err
 			}
 
 			if !existingWorkflow {
-				issue, err := assignIssue(client, query)
+				issue, err := assignIssue(client, arg)
 				branch := string(issue.BranchName)
 
 				err = promptForSafeCheckout(branch)
@@ -41,11 +44,11 @@ func handleWorkflowCheckout() cli.ActionFunc {
 					return err
 				}
 
-				err = storeWorkflowStatus(query, branch)
+				err = storeWorkflowStatus(arg, branch)
 				if err != nil {
 					return err
 				}
-				fmt.Printf("Started workflow for ticket %s on branch %s\n", query, branch)
+				fmt.Printf("Started workflow for ticket %s on branch %s\n", arg, branch)
 				return nil
 			}
 
