@@ -2,6 +2,7 @@ package linear
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/shurcooL/graphql"
@@ -40,12 +41,17 @@ type Issue struct {
 	Assignee    User           `graphql:"assignee"`
 	State       WorkflowState  `graphql:"state"`
 	BranchName  graphql.String `graphql:"branchName"`
+	Team        Team           `graphql:"team"`
 }
 
 type User struct {
 	ID    graphql.ID     `graphql:"id"`
 	Name  graphql.String `graphql:"name"`
 	Email graphql.String `graphql:"email"`
+}
+
+type Team struct {
+	ID graphql.ID `graphql:"id"`
 }
 
 type WorkflowState struct {
@@ -83,13 +89,9 @@ type IssuePayload struct {
 	Success graphql.Boolean `graphql:"success"`
 }
 
-// Mutation struct for assigning issue
-type AssignIssueMutation struct {
-	IssueUpdate IssuePayload `graphql:"issueUpdate(id: $id, input: $input)"`
-}
-
 type IssueUpdateInput struct {
 	AssigneeID graphql.ID `json:"assigneeId,omitempty"`
+	StateID    graphql.ID `json:"stateId,omitempty"`
 }
 
 // RPC-style method to get current user
@@ -104,11 +106,39 @@ func (c *Client) GetViewer(ctx context.Context) (User, error) {
 
 // RPC-style method to assign issue to user
 func (c *Client) AssignIssue(ctx context.Context, id string, assigneeID string) error {
-	var m AssignIssueMutation
+	// First get the issue to get team ID
+	issue, err := c.GetIssue(ctx, id)
+	if err != nil {
+		return err
+	}
+	teamID := issue.Team.ID.(string)
+
+	// Get workflow states for the team
+	states, err := c.GetWorkflowStates(ctx, teamID)
+	if err != nil {
+		return err
+	}
+
+	// Find "In Progress" state
+	var inProgressID graphql.ID
+	for _, state := range states {
+		if string(state.Name) == "In Progress" {
+			inProgressID = state.ID
+			break
+		}
+	}
+	if inProgressID == "" {
+		return errors.New("in progress state not found")
+	}
+
+	var m struct {
+		IssueUpdate IssuePayload `graphql:"issueUpdate(id: $id, input: $input)"`
+	}
 	variables := map[string]any{
 		"id": graphql.String(id),
 		"input": IssueUpdateInput{
 			AssigneeID: graphql.ID(assigneeID),
+			StateID:    inProgressID,
 		},
 	}
 	return c.client.Mutate(ctx, &m, variables)
@@ -131,4 +161,22 @@ func (c *Client) GetAssignedIssues(ctx context.Context) ([]Issue, error) {
 		return nil, err
 	}
 	return q.Viewer.AssignedIssues.Nodes, nil
+}
+
+// Query struct for getting workflow states
+type WorkflowStatesQuery struct {
+	WorkflowStates []WorkflowState `graphql:"workflowStates(filter: {team: {id: {eq: $teamId}}})"`
+}
+
+// RPC-style method to get workflow states for a team
+func (c *Client) GetWorkflowStates(ctx context.Context, teamID string) ([]WorkflowState, error) {
+	var q WorkflowStatesQuery
+	variables := map[string]any{
+		"teamId": graphql.String(teamID),
+	}
+	err := c.client.Query(ctx, &q, variables)
+	if err != nil {
+		return nil, err
+	}
+	return q.WorkflowStates, nil
 }
