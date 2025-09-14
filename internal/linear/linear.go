@@ -165,18 +165,20 @@ func (c *Client) GetAssignedIssues(ctx context.Context) ([]Issue, error) {
 
 // Query struct for getting workflow states
 type WorkflowStatesQuery struct {
-	WorkflowStates []WorkflowState `graphql:"workflowStates(filter: {team: {id: {eq: $teamId}}})"`
+	WorkflowStates struct {
+		Nodes []WorkflowState `graphql:"nodes"`
+	} `graphql:"workflowStates(filter: {team: {id: {eq: $teamId}}})"`
 }
 
 // RPC-style method to get workflow states for a team
 func (c *Client) GetWorkflowStates(ctx context.Context, teamID string) ([]WorkflowState, error) {
 	var q WorkflowStatesQuery
 	variables := map[string]any{
-		"teamId": graphql.String(teamID),
+		"teamId": graphql.ID(teamID),
 	}
 	err := c.client.Query(ctx, &q, variables)
 	if err != nil {
 		return nil, err
 	}
-	return q.WorkflowStates, nil
+	return q.WorkflowStates.Nodes, nil
 }

@@ -2,6 +2,7 @@ package git
 
 import (
 	"bytes"
+	"fmt"
 	"os/exec"
 )
 
@@ -15,7 +16,10 @@ func IsRepo() bool {
 func CurrentBranch() (string, error) {
 	cmd := exec.Command("git", "branch", "--show-current")
 	out, err := cmd.Output()
-	return string(bytes.TrimSpace(out)), err
+	if err != nil {
+		return "", fmt.Errorf("getting current branch: +v", err)
+	}
+	return string(bytes.TrimSpace(out)), nil
 }
 
 // Root returns the root directory of the git repository
@@ -136,6 +140,11 @@ func Pull() error {
 // CreateBranch creates and switches to a new branch
 func CreateBranch(branch string) error {
 	return exec.Command("git", "checkout", "-b", branch).Run()
+}
+
+// DeleteLocalBranch deletes a local branch
+func DeleteLocalBranch(branch string) error {
+	return exec.Command("git", "branch", "-d", branch).Run()
 }
 
 // Stash stashes uncommitted changes

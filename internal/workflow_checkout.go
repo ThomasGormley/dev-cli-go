@@ -37,6 +37,9 @@ func handleWorkflowCheckout() cli.ActionFunc {
 
 			if !existingWorkflow {
 				issue, err := assignIssue(client, arg)
+				if err != nil {
+					return fmt.Errorf("assigning issue: %v", err)
+				}
 				branch := string(issue.BranchName)
 
 				err = promptForSafeCheckout(branch)
