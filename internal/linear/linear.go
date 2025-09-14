@@ -144,6 +144,20 @@ func (c *Client) AssignIssue(ctx context.Context, id string, assigneeID string) 
 	return c.client.Mutate(ctx, &m, variables)
 }
 
+// RPC-style method to update issue state
+func (c *Client) UpdateIssueState(ctx context.Context, id string, stateID string) error {
+	var m struct {
+		IssueUpdate IssuePayload `graphql:"issueUpdate(id: $id, input: $input)"`
+	}
+	variables := map[string]any{
+		"id": graphql.String(id),
+		"input": IssueUpdateInput{
+			StateID: graphql.ID(stateID),
+		},
+	}
+	return c.client.Mutate(ctx, &m, variables)
+}
+
 // Query struct for getting issues assigned to current user
 type AssignedIssuesQuery struct {
 	Viewer struct {
@@ -165,18 +179,20 @@ func (c *Client) GetAssignedIssues(ctx context.Context) ([]Issue, error) {
 
 // Query struct for getting workflow states
 type WorkflowStatesQuery struct {
-	WorkflowStates []WorkflowState `graphql:"workflowStates(filter: {team: {id: {eq: $teamId}}})"`
+	WorkflowStates struct {
+		Nodes []WorkflowState `graphql:"nodes"`
+	} `graphql:"workflowStates(filter: {team: {id: {eq: $teamId}}})"`
 }
 
 // RPC-style method to get workflow states for a team
 func (c *Client) GetWorkflowStates(ctx context.Context, teamID string) ([]WorkflowState, error) {
 	var q WorkflowStatesQuery
 	variables := map[string]any{
-		"teamId": graphql.String(teamID),
+		"teamId": graphql.ID(teamID),
 	}
 	err := c.client.Query(ctx, &q, variables)
 	if err != nil {
 		return nil, err
 	}
-	return q.WorkflowStates, nil
+	return q.WorkflowStates.Nodes, nil
 }

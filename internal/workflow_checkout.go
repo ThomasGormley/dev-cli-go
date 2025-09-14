@@ -2,13 +2,10 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/thomasgormley/dev-cli-go/internal/git"
@@ -37,6 +34,9 @@ func handleWorkflowCheckout() cli.ActionFunc {
 
 			if !existingWorkflow {
 				issue, err := assignIssue(client, arg)
+				if err != nil {
+					return fmt.Errorf("assigning issue: %v", err)
+				}
 				branch := string(issue.BranchName)
 
 				err = promptForSafeCheckout(branch)
@@ -231,61 +231,6 @@ func promptForSafeCheckout(branchName string) error {
 	return nil
 }
 
-// Workflow state structures
-type WorkflowEntry struct {
-	TicketID     string    `json:"ticketId"`
-	Branch       string    `json:"branch"`
-	PrURL        string    `json:"prUrl"`
-	Status       string    `json:"status"`
-	Dependencies []string  `json:"dependencies"`
-	LastUpdated  time.Time `json:"lastUpdated"`
-}
-
-type WorkflowState map[string]WorkflowEntry
-
-// buildWorkflowOptions builds the options list and lookup map for workflow entries and branches
-func buildWorkflowOptions(state WorkflowState) ([]string, map[string]string) {
-	var options []string
-	optionMap := make(map[string]string)
-
-	// Add workflow state entries first
-	for _, entry := range state {
-		option := fmt.Sprintf("🎫 %s (%s)", entry.Branch, entry.TicketID)
-		options = append(options, option)
-		optionMap[option] = entry.Branch
-	}
-
-	return options, optionMap
-}
-
-// loadWorkflowState loads the workflow state from the state file
-func loadWorkflowState() (WorkflowState, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	stateFile := filepath.Join(homeDir, ".dev_workflow_state.json")
-
-	state := make(WorkflowState)
-	if data, err := os.ReadFile(stateFile); err == nil {
-		// Try to unmarshal as map first (new format)
-		err = json.Unmarshal(data, &state)
-		if err != nil {
-			// If that fails, try to unmarshal as array (old format) for backward compatibility
-			var oldState []WorkflowEntry
-			if err := json.Unmarshal(data, &oldState); err != nil {
-				return nil, err
-			}
-			// Convert old format to new format
-			state = make(WorkflowState)
-			for _, entry := range oldState {
-				state[entry.TicketID] = entry
-			}
-		}
-	}
-	return state, nil
-}
-
 func promptForStash() (bool, error) {
 	var stash bool
 	prompt := &survey.Confirm{
@@ -302,47 +247,4 @@ func promptForPop() (bool, error) {
 	}
 	err := survey.AskOne(prompt, &pop)
 	return pop, err
-}
-
-func storeWorkflowStatus(ticketID, branchName string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	stateFile := filepath.Join(homeDir, ".dev_workflow_state.json")
-
-	state := make(WorkflowState)
-	if data, err := os.ReadFile(stateFile); err == nil {
-		// Try to unmarshal as map first (new format)
-		err = json.Unmarshal(data, &state)
-		if err != nil {
-			// If that fails, try to unmarshal as array (old format) for backward compatibility
-			var oldState []WorkflowEntry
-			if err := json.Unmarshal(data, &oldState); err != nil {
-				return err
-			}
-			// Convert old format to new format
-			state = make(WorkflowState)
-			for _, entry := range oldState {
-				state[entry.TicketID] = entry
-			}
-		}
-	}
-
-	// Add new entry
-	entry := WorkflowEntry{
-		TicketID:     ticketID,
-		Branch:       branchName,
-		Status:       "in-progress",
-		Dependencies: []string{},
-		LastUpdated:  time.Now(),
-	}
-	state[ticketID] = entry
-
-	// Write back (always in new map format)
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(stateFile, data, 0644)
 }
