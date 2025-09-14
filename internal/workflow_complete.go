@@ -75,8 +75,11 @@ func handleWorkflowComplete() cli.ActionFunc {
 			return fmt.Errorf("failed to check for unpushed commits: %w", err)
 		}
 
-		if hasUnpushed && !promptForDeleteBranchWithUnpushed(branch) {
-			return nil
+		if hasUnpushed {
+			forceDelete := promptForDeleteBranchWithUnpushed(branch)
+			if !forceDelete {
+				return nil
+			}
 		}
 
 		if err = git.DeleteLocalBranch(branch); err != nil {
@@ -134,15 +137,6 @@ func handleWorkflowComplete() cli.ActionFunc {
 		fmt.Printf("Successfully completed workflow for %s\n", branch)
 		return nil
 	}
-}
-
-func promptForDeleteBranch(branch string) bool {
-	var deleteOrphanedBranch bool
-	survey.AskOne(
-		&survey.Confirm{Message: fmt.Sprintf("Delete '%s' branch?", branch)},
-		&deleteOrphanedBranch,
-	)
-	return deleteOrphanedBranch
 }
 
 func promptForDeleteBranchWithUnpushed(branch string) bool {
