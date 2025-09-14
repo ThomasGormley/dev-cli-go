@@ -177,10 +177,11 @@ func ListBranches() ([]string, error) {
 
 // HasUnpushedCommits checks if the branch has commits not pushed to origin
 func HasUnpushedCommits(branch string) (bool, error) {
-	cmd := exec.Command("git", "log", "--oneline", fmt.Sprintf("origin/%s..%s", branch, branch))
+	cmd := exec.Command("git", "rev-list", "--count", fmt.Sprintf("origin/%s..%s", branch, branch))
 	out, err := cmd.Output()
 	if err != nil {
 		return true, nil // assume has unpushed if can't check (e.g., no remote branch)
 	}
-	return len(strings.TrimSpace(string(out))) > 0, nil
+	count := strings.TrimSpace(string(out))
+	return count != "0", nil
 }
