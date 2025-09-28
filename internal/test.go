@@ -26,13 +26,16 @@ type TestInfo struct {
 var failedTestsFile = os.Getenv("HOME") + "/.dev-cli-failed-tests"
 
 func handleTest(stdout, stderr io.Writer) cli.ActionFunc {
-	goTest := goTest{
-		stdin:  os.Stdin,
-		stdout: stdout,
-		stderr: stderr,
-		env:    os.Environ(),
-	}
 	return func(ctx *cli.Context) error {
+		goTest := goTest{
+			flags: testFlags{
+				verbose: ctx.Bool("verbose"),
+			},
+			stdin:  os.Stdin,
+			stdout: stdout,
+			stderr: stderr,
+			env:    os.Environ(),
+		}
 		if ctx.Bool("all") {
 			return goTest.run(ctx.Context, "./...")
 		}
@@ -247,9 +250,14 @@ type goTest struct {
 	dir string
 	env []string
 
+	flags  testFlags
 	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
+}
+
+type testFlags struct {
+	verbose bool
 }
 
 type testEvent struct {
@@ -266,6 +274,10 @@ func (gt goTest) run(ctx context.Context, path string, args ...string) error {
 	var capturedOutput bytes.Buffer
 	multiWriter := io.MultiWriter(gt.stdout, &capturedOutput)
 	cmd.Stdout = multiWriter
+
+	if gt.flags.verbose {
+		cmd.Args = append(cmd.Args, "-v")
+	}
 
 	fmt.Fprintf(gt.stdout, "💨 %s\n", strings.Join(cmd.Args, " "))
 	err := cmd.Run()

@@ -108,6 +108,12 @@ func Run(
 						Aliases: []string{"f"},
 						Value:   false,
 					},
+					&cli.BoolFlag{
+						Name:    "verbose",
+						Usage:   "run tests with verbose logging",
+						Aliases: []string{"v"},
+						Value:   false,
+					},
 				},
 				Action: handleTest(stdout, stderr),
 			},
