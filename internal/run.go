@@ -108,6 +108,18 @@ func Run(
 						Aliases: []string{"f"},
 						Value:   false,
 					},
+					&cli.BoolFlag{
+						Name:    "verbose",
+						Usage:   "run tests with verbose output",
+						Aliases: []string{"v"},
+						Value:   false,
+					},
+					&cli.BoolFlag{
+						Name:    "rerun",
+						Usage:   "re-run the previously ran test command",
+						Aliases: []string{"r"},
+						Value:   false,
+					},
 				},
 				Action: handleTest(stdout, stderr),
 			},

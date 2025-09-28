@@ -23,16 +23,30 @@ type TestInfo struct {
 	IsPackage   bool // true if this represents a whole package
 }
 
-var failedTestsFile = os.Getenv("HOME") + "/.dev-cli-failed-tests"
+var failedTestsFile = os.Getenv("HOME") + "/.dev_cli_test_failed"
 
 func handleTest(stdout, stderr io.Writer) cli.ActionFunc {
-	goTest := goTest{
-		stdin:  os.Stdin,
-		stdout: stdout,
-		stderr: stderr,
-		env:    os.Environ(),
-	}
 	return func(ctx *cli.Context) error {
+		goTest := goTest{
+			flags: testFlags{
+				verbose: ctx.Bool("verbose"),
+				rerun:   ctx.Bool("rerun"),
+			},
+			stdin:  os.Stdin,
+			stdout: stdout,
+			stderr: stderr,
+			env:    os.Environ(),
+		}
+
+		if goTest.flags.rerun {
+			path, args, err := goTest.readCommandHistory(0)
+			if err == nil {
+				return goTest.run(ctx.Context, path, args...)
+			}
+
+			fmt.Fprintf(stdout, "couldn't determine the previous command")
+		}
+
 		if ctx.Bool("all") {
 			return goTest.run(ctx.Context, "./...")
 		}
@@ -67,7 +81,7 @@ func runFailedTests(ctx *cli.Context, goTest goTest, stdout io.Writer) error {
 }
 
 func promptForTest() (TestInfo, error) {
-	tests, err := ListTestsFromProject()
+	tests, err := listTestsFromProject()
 	if err != nil {
 		return TestInfo{}, err
 	}
@@ -168,7 +182,7 @@ func contains(filterValue string, optValue string, optIndex int) bool {
 	return strings.Contains(strings.ToLower(optValue), strings.ToLower(filterValue))
 }
 
-func ListTests(reader io.Reader) ([]TestInfo, error) {
+func listTests(reader io.Reader) ([]TestInfo, error) {
 	var tests []TestInfo
 
 	// Parse the ripgrep output line by line
@@ -222,7 +236,7 @@ func ListTests(reader io.Reader) ([]TestInfo, error) {
 	return tests, nil
 }
 
-func ListTestsFromProject() ([]TestInfo, error) {
+func listTestsFromProject() ([]TestInfo, error) {
 	// Use ripgrep to find all Go test functions in *_test.go files only
 	cmd := exec.Command("rg", "--type", "go", "-g", "*_test.go", "^func Test[A-Za-z0-9_]+\\(", "-n", "--no-heading")
 	output, err := cmd.Output()
@@ -230,7 +244,7 @@ func ListTestsFromProject() ([]TestInfo, error) {
 		return nil, fmt.Errorf("failed to run ripgrep: %w", err)
 	}
 
-	return ListTests(bytes.NewReader(output))
+	return listTests(bytes.NewReader(output))
 }
 
 func extractPackagePath(filename string) string {
@@ -247,9 +261,15 @@ type goTest struct {
 	dir string
 	env []string
 
+	flags  testFlags
 	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
+}
+
+type testFlags struct {
+	verbose bool
+	rerun   bool
 }
 
 type testEvent struct {
@@ -257,6 +277,11 @@ type testEvent struct {
 	Package string `json:"Package"`
 	Test    string `json:"Test"`
 	Output  string `json:"Output,omitempty"`
+}
+
+type historicalCommand struct {
+	Path string   `json:"path"`
+	Args []string `json:"args"`
 }
 
 func (gt goTest) run(ctx context.Context, path string, args ...string) error {
@@ -269,6 +294,15 @@ func (gt goTest) run(ctx context.Context, path string, args ...string) error {
 
 	fmt.Fprintf(gt.stdout, "💨 %s\n", strings.Join(cmd.Args, " "))
 	err := cmd.Run()
+
+	if err != nil {
+		return err
+	}
+
+	// only persist non-re-runs
+	if !gt.flags.rerun {
+		gt.persistCommandHistory(path, args...)
+	}
 
 	// Process captured output through test2json even if tests failed
 	failures, parseErr := gt.parseTestOutput(ctx, capturedOutput.Bytes())
@@ -292,6 +326,11 @@ func (gt goTest) run(ctx context.Context, path string, args ...string) error {
 func (gt goTest) prepareCmd(ctx context.Context, path string, args ...string) *exec.Cmd {
 	cmdArgs := append([]string{"test", path, "-count=1"}, args...)
 	cmd := exec.CommandContext(ctx, "go", cmdArgs...)
+
+	if gt.flags.verbose {
+		cmd.Args = append(cmd.Args, "-v")
+	}
+
 	cmd.Stdin = gt.stdin
 	cmd.Stderr = gt.stderr
 	cmd.Env = gt.env
@@ -385,4 +424,58 @@ func buildRunPattern(testNames ...string) string {
 	}
 	pattern += ")$"
 	return pattern
+}
+
+var testCommandHistoryFile = os.Getenv("HOME") + "/.dev_test_history"
+
+func (gt goTest) persistCommandHistory(path string, args ...string) {
+	cmd := historicalCommand{
+		Path: path,
+		Args: args,
+	}
+
+	f, err := os.OpenFile(testCommandHistoryFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(gt.stderr, "Warning: failed to open %s: %v\n", testCommandHistoryFile, err)
+		return
+	}
+	defer f.Close()
+
+	encoder := json.NewEncoder(f)
+	if err := encoder.Encode(cmd); err != nil {
+		fmt.Fprintf(gt.stderr, "Warning: failed to encode command: %v\n", err)
+	}
+}
+
+func (gt goTest) readCommandHistory(offset int) (string, []string, error) {
+	f, err := os.Open(testCommandHistoryFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil, fmt.Errorf("no historical command found")
+		}
+		return "", nil, err
+	}
+	defer f.Close()
+
+	var commands []historicalCommand
+	decoder := json.NewDecoder(f)
+	for {
+		var cmd historicalCommand
+		if err := decoder.Decode(&cmd); err != nil {
+			if err == io.EOF {
+				break
+			}
+			continue // skip invalid entries
+		}
+		commands = append(commands, cmd)
+	}
+	if len(commands) == 0 {
+		return "", nil, fmt.Errorf("no historical command found")
+	}
+	index := len(commands) - 1 - offset
+	if index < 0 {
+		return "", nil, fmt.Errorf("offset %d is out of range", offset)
+	}
+	cmd := commands[index]
+	return cmd.Path, cmd.Args, nil
 }

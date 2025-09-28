@@ -74,7 +74,7 @@ internal/example_test.go:10:func TestValid(t *testing.T) {`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := strings.NewReader(tt.input)
-			result, err := ListTests(reader)
+			result, err := listTests(reader)
 
 			if err != nil {
 				t.Fatalf("ListTests() returned error: %v", err)
@@ -130,7 +130,7 @@ another-invalid-line`,
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := strings.NewReader(tt.input)
-			result, err := ListTests(reader)
+			result, err := listTests(reader)
 
 			if err != nil {
 				t.Fatalf("ListTests() should not return error for malformed input: %v", err)
