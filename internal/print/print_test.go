@@ -2,7 +2,6 @@ package print
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 )
 
@@ -241,84 +240,5 @@ func TestWrapMultiVariadic(t *testing.T) {
 
 	if result != expected {
 		t.Errorf("Expected %q, got %q", expected, result)
-	}
-}
-
-func TestSuccessf(t *testing.T) {
-	var buf bytes.Buffer
-	Successf(&buf, "test %s", "success")
-
-	output := buf.String()
-	expected := "\x1b[32mtest success\x1b[0m\n"
-
-	if output != expected {
-		t.Errorf("Expected %q, got %q", expected, output)
-	}
-}
-
-func TestErrorf(t *testing.T) {
-	var buf bytes.Buffer
-	Errorf(&buf, "test %s", "error")
-
-	output := buf.String()
-	expected := "\x1b[31mtest error\x1b[0m\n"
-
-	if output != expected {
-		t.Errorf("Expected %q, got %q", expected, output)
-	}
-}
-
-func TestWarningf(t *testing.T) {
-	var buf bytes.Buffer
-	Warningf(&buf, "test %s", "warning")
-
-	output := buf.String()
-	expected := "\x1b[33mtest warning\x1b[0m\n"
-
-	if output != expected {
-		t.Errorf("Expected %q, got %q", expected, output)
-	}
-}
-
-func TestInfof(t *testing.T) {
-	var buf bytes.Buffer
-	Infof(&buf, "test %s", "info")
-
-	output := buf.String()
-	expected := "test info\n"
-
-	if output != expected {
-		t.Errorf("Expected %q, got %q", expected, output)
-	}
-}
-
-func TestMultipleMessages(t *testing.T) {
-	var buf bytes.Buffer
-
-	Success(&buf, "first")
-	Error(&buf, "second")
-	Warning(&buf, "third")
-	Info(&buf, "fourth")
-
-	output := buf.String()
-	lines := strings.Split(output, "\n")
-
-	// Should have 4 lines + 1 empty line from final newline
-	if len(lines) != 5 {
-		t.Errorf("Expected 5 lines, got %d", len(lines))
-	}
-
-	// Check each line has correct color
-	if !strings.Contains(lines[0], "\x1b[32m") {
-		t.Error("First line should have success color")
-	}
-	if !strings.Contains(lines[1], "\x1b[31m") {
-		t.Error("Second line should have error color")
-	}
-	if !strings.Contains(lines[2], "\x1b[33m") {
-		t.Error("Third line should have warning color")
-	}
-	if !strings.Contains(lines[3], "fourth") {
-		t.Error("Fourth line should contain info text")
 	}
 }

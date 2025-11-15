@@ -9,6 +9,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/thomasgormley/dev-cli-go/internal/print"
+	"github.com/thomasgormley/dev-cli-go/internal/spinner"
 	"github.com/urfave/cli/v2"
 )
 
@@ -19,11 +20,9 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 			return cli.Exit("", 1)
 		}
 
-		print.Info(stdout, print.Wrap(
-			"Checking GitHub authentication...",
-		))
-		if err := ghCli.AuthStatus(); err != nil {
-			print.Error(stderr, print.Cross, "Not authenticated with GitHub CLI")
+		if err := spinner.With("Checking GitHub authentication.", func() error {
+			return ghCli.AuthStatus()
+		}, spinner.WithWriter(stdout), spinner.WithFailureMessage("Not authenticated with GitHub CLI"), spinner.WithSuccessMessage("Authenticated")); err != nil {
 			print.Info(stdout, print.WrapBottom(
 				print.ColorNote("Run 'gh auth login' to authenticate"),
 			))
@@ -74,29 +73,17 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 				"No body provided, using PR template",
 			))
 		}
+		message := "Creating pull request"
 		if draft {
-			print.Info(stdout, print.WrapBottom(
-				print.InfoSym,
-				"Creating draft pull request",
-			))
+			message = "Creating draft pull request"
 		}
 
-		print.Info(stdout, print.Wrap(
-			print.Arrow,
-			"Creating pull request...",
-		))
-		if err := ghCli.CreatePR(title, body, base, draft); err != nil {
-			print.Error(stderr, print.Wrap(
-				print.Cross,
-				fmt.Sprintf("Failed to create pull request: %v", err),
-			))
+		err = spinner.With(message, func() error {
+			return ghCli.CreatePR(title, body, base, draft)
+		}, spinner.WithWriter(stdout), spinner.WithFailureMessage("Failed to create pull request"), spinner.WithSuccessMessage("Pull request created successfully"))
+		if err != nil {
 			return cli.Exit("", 1)
 		}
-
-		print.Success(stdout, print.Wrap(
-			print.Tick,
-			"Pull request created successfully!",
-		))
 
 		if err := promptForOpen(stdout, ghCli); err != nil {
 			print.Warning(stdout, print.Wrap(
