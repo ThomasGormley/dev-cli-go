@@ -99,17 +99,23 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		identifier := c.Args().First()
+
 		if identifier == "" {
-			print.Warning(stdout, print.Wrap(
-				print.WarningSym,
-				"No PR identifier provided, viewing current branch PR...",
-			))
-		} else {
+			branch, err := gitBranch()
+			if err != nil {
+				branch = "current branch"
+			}
 			print.Info(stdout, print.Wrap(
-				print.ColorNote("Viewing PR:"),
-				identifier,
+				"Viewing PR for branch:",
+				print.ColorNote(branch),
 			))
+			return ghCli.ViewPR(identifier)
 		}
+
+		print.Info(stdout, print.Wrap(
+			print.ColorNote("Viewing PR:"),
+			identifier,
+		))
 		return ghCli.ViewPR(identifier)
 	}
 }
