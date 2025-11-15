@@ -19,13 +19,12 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 			return cli.Exit("", 1)
 		}
 
-		print.Info(stdout, print.InfoSym, "Checking GitHub authentication...")
-		if err := ghCli.AuthStatus(); err != nil {
-			print.Error(stderr, "Not authenticated with GitHub CLI")
-			print.Info(stdout, "Run 'gh auth login' to authenticate")
+		print.Info(stdout, print.Wrap(print.ColorNote(print.InfoSym), "Checking GitHub authentication..."))
+		if err := ghCli.AuthStatus(); err == nil {
+			print.Error(stderr, print.Cross, "Not authenticated with GitHub CLI")
+			print.Info(stdout, "Run 'gh auth login' to authenticate\n")
 			return cli.Exit("", 1)
 		}
-		print.Success(stdout, print.Tick, "GitHub authentication verified")
 
 		title, err := titleOrPrompt(c)
 		if err != nil {
@@ -44,7 +43,7 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 			print.Info(stdout, print.InfoSym, "No body provided, using PR template")
 		}
 		if draft {
-			print.Info(stdout, "Creating draft pull request")
+			print.Info(stdout, print.InfoSym, "Creating draft pull request")
 		}
 
 		print.Info(stdout, print.Arrow, "Creating pull request...")
@@ -53,7 +52,12 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 			return cli.Exit("", 1)
 		}
 
-		print.Success(stdout, print.Tick, "Pull request created successfully!")
+		print.Success(stdout, print.Wrap(print.Tick, "Pull request created successfully!"))
+
+		if err := promptForOpen(stdout, ghCli); err != nil {
+			print.Warning(stdout, print.WarningSym, "Could not open PR in browser")
+		}
+
 		return cli.Exit("", 0)
 	}
 }
@@ -105,6 +109,25 @@ func promptForTitle() (string, error) {
 	var title string
 	err = survey.AskOne(prompt, &title)
 	return title, err
+}
+
+func promptForOpen(stdout io.Writer, ghCli gh.GitHubClienter) error {
+	var openInBrowser bool
+	prompt := &survey.Confirm{
+		Message: "Open pull request in browser?",
+		Default: true,
+	}
+
+	if err := survey.AskOne(prompt, &openInBrowser); err != nil {
+		return err
+	}
+
+	if openInBrowser {
+		print.Info(stdout, print.Arrow, "Opening pull request in browser...")
+		return ghCli.ViewPR("")
+	}
+
+	return nil
 }
 
 func prTitleFromBranch(branch string) string {
