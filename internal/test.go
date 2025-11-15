@@ -52,7 +52,9 @@ func handleTest(stdout, stderr io.Writer) cli.ActionFunc {
 		}
 
 		if ctx.Bool("failed") {
-			return runFailedTests(ctx, goTest, stdout)
+			// TODO: Implement runFailedTests function
+			fmt.Fprintf(stdout, "failed tests functionality not yet implemented\n")
+			return nil
 		}
 
 		selectedTest, err := promptForTest()

@@ -89,6 +89,12 @@ func Run(
 						Usage:  "Sync diary entries to remote",
 						Action: handleDiarySync(stdout, stderr),
 					},
+					{
+						Name:    "tasks",
+						Usage:   "Manage incomplete diary tasks",
+						Aliases: []string{"t"},
+						Action:  handleDiaryTasks(stdout, stderr),
+					},
 				},
 			},
 			{
