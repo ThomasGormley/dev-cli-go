@@ -103,12 +103,6 @@ func Run(
 						Value:   false,
 					},
 					&cli.BoolFlag{
-						Name:    "failed",
-						Usage:   "run only previously failed tests",
-						Aliases: []string{"f"},
-						Value:   false,
-					},
-					&cli.BoolFlag{
 						Name:    "verbose",
 						Usage:   "run tests with verbose output",
 						Aliases: []string{"v"},
