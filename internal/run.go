@@ -124,31 +124,6 @@ func Run(
 				},
 				Action: handleTest(stdout, stderr),
 			},
-			{
-				Name:    "workflow",
-				Usage:   "Workflow utilities",
-				Aliases: []string{"w"},
-				Subcommands: []*cli.Command{
-					{
-						Name:    "checkout",
-						Usage:   "Checkout branches or start/manage workflows",
-						Action:  handleWorkflowCheckout(),
-						Aliases: []string{"co"},
-						Args:    false, // Optional argument
-					},
-					{
-						Name:   "complete",
-						Usage:  "Checkout branches or start/manage workflows",
-						Action: handleWorkflowComplete(),
-						Args:   false, // Optional argument
-					},
-					{
-						Name:   "status",
-						Usage:  "Show workflow status",
-						Action: handleWorkflowStatus(),
-					},
-				},
-			},
 		},
 	}
 
