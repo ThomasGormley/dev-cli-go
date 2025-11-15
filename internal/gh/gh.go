@@ -53,6 +53,8 @@ func (g *ghClient) ViewPR(identifier string) error {
 		args = append(args, identifier)
 	}
 	cmd := g.prepareCmd("gh", append(args, "--web")...)
+	cmd.Stdout = nil // Suppress GH CLI output
+	cmd.Stderr = nil // Suppress GH CLI error output
 	err := cmd.Run()
 	if err != nil {
 		return err

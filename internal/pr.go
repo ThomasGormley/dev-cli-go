@@ -19,11 +19,40 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 			return cli.Exit("", 1)
 		}
 
-		print.Info(stdout, print.Wrap(print.ColorNote(print.InfoSym), "Checking GitHub authentication..."))
-		if err := ghCli.AuthStatus(); err == nil {
+		print.Info(stdout, print.Wrap(
+			"Checking GitHub authentication...",
+		))
+		if err := ghCli.AuthStatus(); err != nil {
 			print.Error(stderr, print.Cross, "Not authenticated with GitHub CLI")
-			print.Info(stdout, "Run 'gh auth login' to authenticate\n")
+			print.Info(stdout, print.WrapBottom(
+				print.ColorNote("Run 'gh auth login' to authenticate"),
+			))
 			return cli.Exit("", 1)
+		}
+
+		prStatus, err := ghCli.PRStatus("")
+		if err != nil {
+			// non critical error, just continue
+		}
+
+		if !prStatus.CurrentBranch.Closed {
+			print.Info(stdout,
+				print.ColorNote(print.InfoSym),
+				"Pull request already exists for this branch",
+			)
+			print.Info(stdout, print.WrapTop(
+				print.ColorNote("Title:"),
+				prStatus.CurrentBranch.Title,
+			))
+			print.Info(stdout, print.WrapBottom(
+				print.ColorNote("URL:"),
+				prStatus.CurrentBranch.URL,
+			))
+
+			if err := promptForOpen(stdout, ghCli); err != nil {
+				print.Warning(stdout, print.WarningSym, "Could not open PR in browser")
+			}
+			return cli.Exit("", 0)
 		}
 
 		title, err := titleOrPrompt(c)
@@ -40,22 +69,40 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 		base := c.String("base")
 		draft := c.Bool("draft")
 		if body == "" {
-			print.Info(stdout, print.InfoSym, "No body provided, using PR template")
+			print.Info(stdout, print.WrapBottom(
+				print.InfoSym,
+				"No body provided, using PR template",
+			))
 		}
 		if draft {
-			print.Info(stdout, print.InfoSym, "Creating draft pull request")
+			print.Info(stdout, print.WrapBottom(
+				print.InfoSym,
+				"Creating draft pull request",
+			))
 		}
 
-		print.Info(stdout, print.Arrow, "Creating pull request...")
+		print.Info(stdout, print.Wrap(
+			print.Arrow,
+			"Creating pull request...",
+		))
 		if err := ghCli.CreatePR(title, body, base, draft); err != nil {
-			print.Error(stderr, fmt.Sprintf("Failed to create pull request: %v", err))
+			print.Error(stderr, print.Wrap(
+				print.Cross,
+				fmt.Sprintf("Failed to create pull request: %v", err),
+			))
 			return cli.Exit("", 1)
 		}
 
-		print.Success(stdout, print.Wrap(print.Tick, "Pull request created successfully!"))
+		print.Success(stdout, print.Wrap(
+			print.Tick,
+			"Pull request created successfully!",
+		))
 
 		if err := promptForOpen(stdout, ghCli); err != nil {
-			print.Warning(stdout, print.WarningSym, "Could not open PR in browser")
+			print.Warning(stdout, print.Wrap(
+				print.WarningSym,
+				"Could not open PR in browser",
+			))
 		}
 
 		return cli.Exit("", 0)
@@ -66,9 +113,15 @@ func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 	return func(c *cli.Context) error {
 		identifier := c.Args().First()
 		if identifier == "" {
-			print.Warning(stdout, "No PR identifier provided, viewing current branch PR...")
+			print.Warning(stdout, print.Wrap(
+				print.WarningSym,
+				"No PR identifier provided, viewing current branch PR...",
+			))
 		} else {
-			print.Info(stdout, fmt.Sprintf("Viewing PR: %s", identifier))
+			print.Info(stdout, print.Wrap(
+				print.ColorNote("Viewing PR:"),
+				identifier,
+			))
 		}
 		return ghCli.ViewPR(identifier)
 	}
@@ -123,7 +176,10 @@ func promptForOpen(stdout io.Writer, ghCli gh.GitHubClienter) error {
 	}
 
 	if openInBrowser {
-		print.Info(stdout, print.Arrow, "Opening pull request in browser...")
+		print.Info(stdout, print.Wrap(
+			print.Arrow,
+			"Opening pull request in browser...",
+		))
 		return ghCli.ViewPR("")
 	}
 
