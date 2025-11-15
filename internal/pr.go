@@ -8,37 +8,52 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
+	"github.com/thomasgormley/dev-cli-go/internal/print"
 	"github.com/urfave/cli/v2"
 )
 
 func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		if !isGitRepo() {
-			return cli.Exit("Not a git repo", 1)
+			print.Error(stderr, "Not a git repository")
+			return cli.Exit("", 1)
 		}
 
+		print.Info(stdout, print.InfoSym, "Checking GitHub authentication...")
 		if err := ghCli.AuthStatus(); err != nil {
-			return cli.Exit("Not authenticated with GitHub CLI, try running `gh auth login`", 1)
+			print.Error(stderr, "Not authenticated with GitHub CLI")
+			print.Info(stdout, "Run 'gh auth login' to authenticate")
+			return cli.Exit("", 1)
 		}
+		print.Success(stdout, print.Tick, "GitHub authentication verified")
 
 		title, err := titleOrPrompt(c)
-
 		if err != nil {
 			return err
 		}
 
 		body, err := bodyOrPRTemplate(c)
-
 		if err != nil {
 			return err
 		}
 
+		// Show info about what we're using
 		base := c.String("base")
-
-		if err := ghCli.CreatePR(title, body, base, c.Bool("draft")); err != nil {
-			return cli.Exit(err, 1)
+		draft := c.Bool("draft")
+		if body == "" {
+			print.Info(stdout, print.InfoSym, "No body provided, using PR template")
+		}
+		if draft {
+			print.Info(stdout, "Creating draft pull request")
 		}
 
+		print.Info(stdout, print.Arrow, "Creating pull request...")
+		if err := ghCli.CreatePR(title, body, base, draft); err != nil {
+			print.Error(stderr, fmt.Sprintf("Failed to create pull request: %v", err))
+			return cli.Exit("", 1)
+		}
+
+		print.Success(stdout, print.Tick, "Pull request created successfully!")
 		return cli.Exit("", 0)
 	}
 }
@@ -46,6 +61,11 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		identifier := c.Args().First()
+		if identifier == "" {
+			print.Warning(stdout, "No PR identifier provided, viewing current branch PR...")
+		} else {
+			print.Info(stdout, fmt.Sprintf("Viewing PR: %s", identifier))
+		}
 		return ghCli.ViewPR(identifier)
 	}
 }
