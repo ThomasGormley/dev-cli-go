@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -37,6 +38,7 @@ type TaskWithHistory struct {
 
 // TaskLocation represents where a task appears in a file
 type TaskLocation struct {
+	TaskItem
 	FilePath string
 	Line     int
 	Date     time.Time
@@ -226,6 +228,11 @@ func (r FSRepository) GetAllIncompleteTasks() ([]TaskWithHistory, error) {
 			if existing, found := taskMap[normalized]; found {
 				// Update existing task
 				existing.Locations = append(existing.Locations, TaskLocation{
+					TaskItem: TaskItem{
+						Text:      task.Text,
+						Completed: false,
+						Line:      task.Line,
+					},
 					FilePath: filePath,
 					Line:     task.Line,
 					Date:     entryDate,
@@ -247,6 +254,11 @@ func (r FSRepository) GetAllIncompleteTasks() ([]TaskWithHistory, error) {
 					FirstSeen: entryDate,
 					LastSeen:  entryDate,
 					Locations: []TaskLocation{{
+						TaskItem: TaskItem{
+							Text:      task.Text,
+							Completed: false,
+							Line:      task.Line,
+						},
 						FilePath: filePath,
 						Line:     task.Line,
 						Date:     entryDate,
@@ -280,9 +292,9 @@ func (r FSRepository) GetAllIncompleteTasks() ([]TaskWithHistory, error) {
 	return result, nil
 }
 
-// MarkTaskComplete marks a specific task occurrence as complete
+// MarkTaskComplete marks a specific task occurrence as complete using robust content matching
 func (r FSRepository) MarkTaskComplete(location TaskLocation) error {
-	// Read the file
+	// Read file
 	file, err := os.Open(location.FilePath)
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
@@ -300,21 +312,46 @@ func (r FSRepository) MarkTaskComplete(location TaskLocation) error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	// Update the specific line (convert to 0-based index)
-	if location.Line < 1 || location.Line > len(lines) {
-		return fmt.Errorf("line number %d out of range", location.Line)
+	// Create regex pattern to match the specific task text
+	// This handles various checkbox formats: - [ ], -[], -[ ], etc.
+	taskPattern := regexp.MustCompile(`^(\s*)-\s*\[\s*\]\s*` + regexp.QuoteMeta(location.Text) + `\s*$`)
+
+	// Search for the task in the file
+	found := false
+	for i, line := range lines {
+		if taskPattern.MatchString(line) {
+			// Replace with completed task
+			indent := ""
+			if matches := regexp.MustCompile(`^(\s*)`).FindStringSubmatch(line); len(matches) > 1 {
+				indent = matches[1]
+			}
+			lines[i] = fmt.Sprintf("%s- [x] %s", indent, location.Text)
+			found = true
+			break
+		}
 	}
 
-	lineIndex := location.Line - 1
-	originalLine := lines[lineIndex]
-
-	// Replace incomplete task with completed task
-	updatedLine := strings.Replace(originalLine, "- [ ]", "- [x]", 1)
-	if updatedLine == originalLine {
-		return fmt.Errorf("task not found in incomplete state at line %d", location.Line)
+	if !found {
+		// Fallback: try simple text-based search
+		for i, line := range lines {
+			if strings.Contains(line, location.Text) && strings.Contains(line, "- [") {
+				// Replace incomplete task with completed task
+				updatedLine := strings.Replace(line, "- [ ]", "- [x]", 1)
+				updatedLine = strings.Replace(updatedLine, "-[]", "- [x]", 1)
+				updatedLine = strings.Replace(updatedLine, "- [X]", "- [x]", 1)
+				updatedLine = strings.Replace(updatedLine, "-[X]", "- [x]", 1)
+				if updatedLine != line {
+					lines[i] = updatedLine
+					found = true
+					break
+				}
+			}
+		}
 	}
 
-	lines[lineIndex] = updatedLine
+	if !found {
+		return fmt.Errorf("task '%s' not found in file %s", location.Text, location.FilePath)
+	}
 
 	// Write back to file
 	content := strings.Join(lines, "\n")
