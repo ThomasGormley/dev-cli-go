@@ -38,7 +38,7 @@ func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 
 		editorPath, editorArgs, ok := editor.Lookup()
 		if !ok {
-			return cli.Exit("$EDITOR not set, can't open diary entry", 1)
+			editorPath = "zed"
 		}
 
 		diaryRepo, ok := diary.RepoPath()

@@ -82,13 +82,8 @@ func Run(
 						Name:    "open",
 						Usage:   "Open the diary, defaults to today's entry",
 						Aliases: []string{"o"},
-						Flags: []cli.Flag{
-							&cli.BoolFlag{
-								Name:  "repo-only",
-								Usage: "Open only the repository, not today's entry",
-							},
-						},
-						Action: handleDiaryOpen(stdout, stderr),
+						Flags:   []cli.Flag{&cli.BoolFlag{Name: ""}},
+						Action:  handleDiaryOpen(stdout, stderr),
 					},
 					{
 						Name:   "sync",

@@ -8,11 +8,11 @@ import (
 func Lookup() (editor string, args []string, found bool) {
 	editor, found = os.LookupEnv("EDITOR")
 	if editor == "" {
-		return "", nil, false
+		return "", []string{}, false
 	}
 	parts := strings.Fields(editor)
 	if len(parts) == 0 {
-		return "", nil, false
+		return "", []string{}, false
 	}
 	return parts[0], parts[1:], found
 }
