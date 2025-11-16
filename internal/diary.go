@@ -33,12 +33,8 @@ func handleDiaryNew(stdout, stderr io.Writer) cli.ActionFunc {
 
 func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
+		repoOnly := c.Bool("repo-only")
 		today := time.Now()
-		// stdout.Write([]byte("Opening today's diary entry, " + today.Format(time.DateOnly) + "...\n"))
-		// err := prepareCmd(nil, stdout, stderr, path.Join(diaryDir, "scripts", "open.sh")).Run()
-		// if err != nil {
-		// 	return cli.Exit(err, 1)
-		// }
 
 		editorPath, editorArgs, ok := editor.Lookup()
 		if !ok {
@@ -50,37 +46,40 @@ func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 			return cli.Exit("Diary repo path not found", 1)
 		}
 
-		entryPath, err := diary.EnsureEntryExists(today)
-		if err != nil {
-			return cli.Exit(err, 1)
-		}
-
-		// Check how many lines the entryPath file is
-		file, err := os.Open(entryPath)
-		if err != nil {
-			return cli.Exit(err, 1)
-		}
-		defer file.Close()
-
-		lineCount, err := lineCounter(file)
-
-		if lineCount <= 3 {
-			entryPath = entryPath + fmt.Sprintf(":%d:1", lineCount)
-		}
-
-		// So we don't open the file in some random repo window we need to
-		// open the repository first...
+		// Always open the repository first
 		cmd := prepareCmd(c.Context, os.Stdin, stdout, stderr, editorPath, append(editorArgs, diaryRepo)...)
-
 		if err := cmd.Start(); err != nil {
 			return cli.Exit(err, 1)
 		}
 
-		// then the file...
-		cmd = prepareCmd(c.Context, os.Stdin, stdout, stderr, editorPath, append(editorArgs, entryPath)...)
+		// Only open today's entry if not repo-only
+		if !repoOnly {
+			entryPath, err := diary.EnsureEntryExists(today)
+			if err != nil {
+				return cli.Exit(err, 1)
+			}
 
-		if err := cmd.Start(); err != nil {
-			return cli.Exit(err, 1)
+			// Check how many lines the entryPath file is
+			file, err := os.Open(entryPath)
+			if err != nil {
+				return cli.Exit(err, 1)
+			}
+			defer file.Close()
+
+			lineCount, err := lineCounter(file)
+			if err != nil {
+				return cli.Exit(err, 1)
+			}
+
+			if lineCount <= 3 {
+				entryPath = entryPath + fmt.Sprintf(":%d:1", lineCount)
+			}
+
+			// Open the file
+			cmd = prepareCmd(c.Context, os.Stdin, stdout, stderr, editorPath, append(editorArgs, entryPath)...)
+			if err := cmd.Start(); err != nil {
+				return cli.Exit(err, 1)
+			}
 		}
 
 		return nil
