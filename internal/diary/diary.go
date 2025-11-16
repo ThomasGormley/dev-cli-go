@@ -1,116 +1,135 @@
 package diary
 
 import (
-	"errors"
+	"bufio"
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/thomasgormley/dev-cli-go/internal/git"
 )
 
-func DateStringsFor(t time.Time) (year, month, full string) {
-	year = t.Format("2006")
-	month = t.Format("01")
-	full = t.Format("2006-01-02")
-	return
+// Entry is a struct representation of a Diary Entry persisted to a File
+type Entry struct {
+	Date     time.Time
+	Path     string
+	Content  string
+	Tasks    []TaskItem
+	Sections []ContentSection
 }
 
-func RepoPath() (string, bool) {
-	// return os.LookupEnv("DIARY_REPO")
-	var diaryDir = path.Join(os.Getenv("HOME"), "dev", "engineering-diary")
-	return diaryDir, true
+// TaskItem represents a TODO item within an Entry
+type TaskItem struct {
+	Text      string
+	Completed bool
+	Line      int
 }
 
-func EntryPathFor(t time.Time) (string, error) {
-	year, month, full := DateStringsFor(t)
+// TaskWithHistory extends TaskItem with historical information
+type TaskWithHistory struct {
+	TaskItem
+	FirstSeen time.Time
+	LastSeen  time.Time
+	Locations []TaskLocation
+}
 
-	repo, ok := RepoPath()
-	if !ok {
-		return "", fmt.Errorf("DIARY_REPO environment variable not set")
+// TaskLocation represents where a task appears in a file
+type TaskLocation struct {
+	TaskItem
+	FilePath string
+	Line     int
+	Date     time.Time
+}
+
+// ContentSection represents a markdown section within an Entry
+type ContentSection struct {
+	Title string
+	Lines []string
+}
+
+// FSRepository is the filesystem storage layer for Diary Entries
+type FSRepository struct {
+	basePath string
+	entries  []*Entry // lazily-loaded
+}
+
+func NewFilesystemRepository() FSRepository {
+	path, found := RepoPath()
+	if !found {
+		panic("Diary repo path not found")
 	}
 
-	return path.Join(repo, "docs", year, month, fmt.Sprintf("%s.md", full)), nil
+	return FSRepository{
+		basePath: path,
+	}
 }
 
-func EntryExists(t time.Time) bool {
-	path, err := EntryPathFor(t)
+func (r FSRepository) NewEntry() error {
+	today := time.Now()
+	year, month, date := DateStringsFor(today)
 
+	// Create directory path: docs/YYYY/MM/
+	dirPath := path.Join(r.basePath, "docs", year, month)
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// Create file path: docs/YYYY/MM/YYYY-MM-DD.md
+	filePath := path.Join(dirPath, date+".md")
+
+	// Check if entry already exists
+	if _, err := os.Stat(filePath); err == nil {
+		return fmt.Errorf("entry for %s already exists", date)
+	}
+
+	// Extract incomplete TODOs from previous entries
+	incompleteTasks, err := r.extractIncompleteTasks(today)
 	if err != nil {
-		return false
+		return fmt.Errorf("failed to extract incomplete tasks: %w", err)
 	}
 
-	_, err = os.Stat(path)
-	return err == nil
+	// Create basic template with carried over tasks
+	dayName := today.Format("Monday")
+	template := fmt.Sprintf("# %s %s\n\n", dayName, date)
+
+	// Add TODO section if there are incomplete tasks
+	if len(incompleteTasks) > 0 {
+		template += "## TODO\n\n"
+		for _, task := range incompleteTasks {
+			template += fmt.Sprintf("- [ ] %s\n", task.Text)
+		}
+		template += "\n"
+	}
+
+	// Write template to file
+	if err := os.WriteFile(filePath, []byte(template), 0644); err != nil {
+		return fmt.Errorf("failed to write entry file: %w", err)
+	}
+
+	return nil
 }
 
-func EnsureEntryExists(t time.Time) (string, error) {
-	entryPath, err := EntryPathFor(t)
-	if err != nil {
-		return "", err
-	}
-
-	// Check if the entry file exists
-	_, statErr := os.Stat(entryPath)
-	if statErr == nil {
-		return entryPath, nil
-	}
-
-	// If not exists, create parent directories and the file
-	dir := path.Dir(entryPath)
-	if mkErr := os.MkdirAll(dir, 0755); mkErr != nil {
-		return "", mkErr
-	}
-
-	if err := NewEntry(); err != nil {
-		return "", err
-	}
-
-	return entryPath, nil
-}
-
-func NewEntry() error {
-	repo, ok := RepoPath()
-	if !ok {
-		return errors.New("unable to find diary repo")
-	}
-	return exec.Command(path.Join(repo, "scripts", "new-entry.sh")).Run()
-
-}
-
-func SyncToRemote() error {
-	repo, ok := RepoPath()
-	if !ok {
-		return errors.New("unable to find diary repo")
-	}
-
+func (r FSRepository) Commit(ctx context.Context) error {
 	docsDir := "docs"
 
 	// Check if docs directory exists
-	docsPath := path.Join(repo, docsDir)
+	docsPath := path.Join(r.basePath, docsDir)
 	if _, err := os.Stat(docsPath); os.IsNotExist(err) {
 		return fmt.Errorf("directory %s does not exist", docsDir)
 	}
 
-	// Change to repository directory and check if it's a git repo
-	if err := os.Chdir(repo); err != nil {
+	if err := os.Chdir(r.basePath); err != nil {
 		return fmt.Errorf("failed to change to repository directory: %w", err)
 	}
-
-	// Check if it's a git repository
-	if !git.IsRepo() {
-		return errors.New("not a git repository")
-	}
-
-	// Add changes to staging area
 	if err := git.Add(docsDir); err != nil {
 		return fmt.Errorf("failed to add changes to staging: %w", err)
 	}
 
-	// Check for uncommitted changes
 	hasChanges, err := git.HasUncommittedChanges(docsDir)
 	if err != nil {
 		return fmt.Errorf("failed to check for changes: %w", err)
@@ -139,53 +158,252 @@ func SyncToRemote() error {
 	return nil
 }
 
-func createCommitMessage(dir string) (string, error) {
-	statusOutput, err := git.Status(dir)
+// extractIncompleteTasks finds and extracts incomplete tasks from previous diary entries
+func (r FSRepository) extractIncompleteTasks(currentDate time.Time) ([]TaskItem, error) {
+	extractor := newTaskExtractor()
+	ctx := context.Background()
+
+	docsDir := path.Join(r.basePath, "docs")
+	var allTasks []TaskItem
+
+	// Walk through all diary entry files in reverse chronological order
+	err := filepath.Walk(docsDir, func(filePath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip directories and non-markdown files
+		if info.IsDir() || !strings.HasSuffix(filePath, ".md") {
+			return nil
+		}
+
+		// Extract date from filename and check if it's before current date
+		fileName := filepath.Base(filePath)
+		dateStr := strings.TrimSuffix(fileName, ".md")
+
+		// Skip if filename doesn't match expected date format
+		if len(dateStr) != 10 {
+			return nil
+		}
+
+		entryDate, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			return nil // Skip files that don't match date format
+		}
+
+		// Only process entries before the current date
+		if !entryDate.Before(currentDate) {
+			return nil
+		}
+
+		// Open and parse the file
+		file, err := os.Open(filePath)
+		if err != nil {
+			return nil // Skip files that can't be opened
+		}
+		defer file.Close()
+
+		tasks, err := extractor.extract(ctx, file)
+		if err != nil {
+			return nil // Skip files that can't be parsed
+		}
+
+		allTasks = append(allTasks, tasks...)
+		return nil
+	})
+
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("failed to walk diary directory: %w", err)
 	}
 
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	header := fmt.Sprintf("Changes committed on %s", timestamp)
+	// Deduplicate tasks
+	deduplicatedTasks := extractor.deduplicateTasks(allTasks)
 
-	var addedFiles, modifiedFiles, deletedFiles, untrackedFiles []string
+	return deduplicatedTasks, nil
+}
 
-	lines := strings.Split(strings.TrimSpace(statusOutput), "\n")
-	for _, line := range lines {
-		if len(line) < 3 {
-			continue
+// GetAllIncompleteTasks scans ALL diary entries and returns tasks with history
+func (r FSRepository) GetAllIncompleteTasks() ([]TaskWithHistory, error) {
+	extractor := newTaskExtractor()
+	ctx := context.Background()
+
+	docsDir := path.Join(r.basePath, "docs")
+	taskMap := make(map[string]*TaskWithHistory) // Key: normalized task text
+
+	// Walk through all diary entry files chronologically
+	err := filepath.Walk(docsDir, func(filePath string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
 		}
 
-		status := line[:2]
-		file := line[3:]
+		// Skip directories and non-markdown files
+		if info.IsDir() || !strings.HasSuffix(filePath, ".md") {
+			return nil
+		}
 
-		switch status {
-		case " M", "M ":
-			modifiedFiles = append(modifiedFiles, "    "+file)
-		case " A", "A ":
-			addedFiles = append(addedFiles, "    "+file)
-		case " D", "D ":
-			deletedFiles = append(deletedFiles, "    "+file)
-		case "??":
-			untrackedFiles = append(untrackedFiles, "    "+file)
+		// Extract date from filename
+		fileName := filepath.Base(filePath)
+		dateStr := strings.TrimSuffix(fileName, ".md")
+
+		// Skip if filename doesn't match expected date format
+		if len(dateStr) != 10 {
+			return nil
+		}
+
+		entryDate, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			return nil // Skip files that don't match date format
+		}
+
+		// Open and parse the file
+		file, err := os.Open(filePath)
+		if err != nil {
+			return nil // Skip files that can't be opened
+		}
+		defer file.Close()
+
+		tasks, err := extractor.extract(ctx, file)
+		if err != nil {
+			return nil // Skip files that can't be parsed
+		}
+
+		// Process each task
+		for _, task := range tasks {
+			normalized := strings.ToLower(strings.TrimSpace(task.Text))
+
+			if existing, found := taskMap[normalized]; found {
+				// Update existing task
+				existing.Locations = append(existing.Locations, TaskLocation{
+					TaskItem: TaskItem{
+						Text:      task.Text,
+						Completed: false,
+						Line:      task.Line,
+					},
+					FilePath: filePath,
+					Line:     task.Line,
+					Date:     entryDate,
+				})
+				if entryDate.Before(existing.FirstSeen) {
+					existing.FirstSeen = entryDate
+				}
+				if entryDate.After(existing.LastSeen) {
+					existing.LastSeen = entryDate
+				}
+			} else {
+				// Create new task
+				taskMap[normalized] = &TaskWithHistory{
+					TaskItem: TaskItem{
+						Text:      task.Text,
+						Completed: false,
+						Line:      task.Line,
+					},
+					FirstSeen: entryDate,
+					LastSeen:  entryDate,
+					Locations: []TaskLocation{{
+						TaskItem: TaskItem{
+							Text:      task.Text,
+							Completed: false,
+							Line:      task.Line,
+						},
+						FilePath: filePath,
+						Line:     task.Line,
+						Date:     entryDate,
+					}},
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk diary directory: %w", err)
+	}
+
+	// Convert map to slice and sort by first seen date
+	var result []TaskWithHistory
+	for _, task := range taskMap {
+		result = append(result, *task)
+	}
+
+	// Sort by first seen date (oldest first)
+	for i := 0; i < len(result)-1; i++ {
+		for j := i + 1; j < len(result); j++ {
+			if result[i].FirstSeen.After(result[j].FirstSeen) {
+				result[i], result[j] = result[j], result[i]
+			}
 		}
 	}
 
-	var messageParts []string
-	messageParts = append(messageParts, header)
+	return result, nil
+}
 
-	if len(addedFiles) > 0 {
-		messageParts = append(messageParts, "Added:\n"+strings.Join(addedFiles, "\n"))
+// MarkTaskComplete marks a specific task occurrence as complete using robust content matching
+func (r FSRepository) MarkTaskComplete(location TaskLocation) error {
+	// Read file
+	file, err := os.Open(location.FilePath)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
 	}
-	if len(modifiedFiles) > 0 {
-		messageParts = append(messageParts, "Modified:\n"+strings.Join(modifiedFiles, "\n"))
-	}
-	if len(deletedFiles) > 0 {
-		messageParts = append(messageParts, "Deleted:\n"+strings.Join(deletedFiles, "\n"))
-	}
-	if len(untrackedFiles) > 0 {
-		messageParts = append(messageParts, "Untracked:\n"+strings.Join(untrackedFiles, "\n"))
+	defer file.Close()
+
+	// Read all lines
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
 	}
 
-	return strings.Join(messageParts, "\n\n"), nil
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+
+	// Create regex pattern to match the specific task text
+	// This handles various checkbox formats: - [ ], -[], -[ ], etc.
+	taskPattern := regexp.MustCompile(`^(\s*)-\s*\[\s*\]\s*` + regexp.QuoteMeta(location.Text) + `\s*$`)
+
+	// Search for the task in the file
+	found := false
+	for i, line := range lines {
+		if taskPattern.MatchString(line) {
+			// Replace with completed task
+			indent := ""
+			if matches := regexp.MustCompile(`^(\s*)`).FindStringSubmatch(line); len(matches) > 1 {
+				indent = matches[1]
+			}
+			lines[i] = fmt.Sprintf("%s- [x] %s", indent, location.Text)
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		// Fallback: try simple text-based search
+		for i, line := range lines {
+			if strings.Contains(line, location.Text) && strings.Contains(line, "- [") {
+				// Replace incomplete task with completed task
+				updatedLine := strings.Replace(line, "- [ ]", "- [x]", 1)
+				updatedLine = strings.Replace(updatedLine, "-[]", "- [x]", 1)
+				updatedLine = strings.Replace(updatedLine, "- [X]", "- [x]", 1)
+				updatedLine = strings.Replace(updatedLine, "-[X]", "- [x]", 1)
+				if updatedLine != line {
+					lines[i] = updatedLine
+					found = true
+					break
+				}
+			}
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("task '%s' not found in file %s", location.Text, location.FilePath)
+	}
+
+	// Write back to file
+	content := strings.Join(lines, "\n")
+	if err := os.WriteFile(location.FilePath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
 }

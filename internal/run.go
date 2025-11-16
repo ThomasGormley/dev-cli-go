@@ -80,14 +80,21 @@ func Run(
 					},
 					{
 						Name:    "open",
-						Usage:   "Open today's diary entry",
+						Usage:   "Open the diary, defaults to today's entry",
 						Aliases: []string{"o"},
+						Flags:   []cli.Flag{&cli.BoolFlag{Name: ""}},
 						Action:  handleDiaryOpen(stdout, stderr),
 					},
 					{
 						Name:   "sync",
 						Usage:  "Sync diary entries to remote",
 						Action: handleDiarySync(stdout, stderr),
+					},
+					{
+						Name:    "tasks",
+						Usage:   "Manage incomplete diary tasks",
+						Aliases: []string{"t"},
+						Action:  handleDiaryTasks(stdout, stderr),
 					},
 				},
 			},
@@ -100,12 +107,6 @@ func Run(
 						Name:    "all",
 						Usage:   "runs all tests",
 						Aliases: []string{"a"},
-						Value:   false,
-					},
-					&cli.BoolFlag{
-						Name:    "failed",
-						Usage:   "run only previously failed tests",
-						Aliases: []string{"f"},
 						Value:   false,
 					},
 					&cli.BoolFlag{
