@@ -14,6 +14,7 @@ import (
 	"github.com/thomasgormley/dev-cli-go/internal/diary"
 	"github.com/thomasgormley/dev-cli-go/internal/editor"
 	"github.com/thomasgormley/dev-cli-go/internal/print"
+	"github.com/thomasgormley/dev-cli-go/internal/spinner"
 	"github.com/urfave/cli/v2"
 )
 
@@ -86,15 +87,18 @@ func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 	}
 }
 
-func handleDiarySync(stdout, stderr io.Writer) cli.ActionFunc {
+func handleDiarySync(_, _ io.Writer) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		stdout.Write([]byte("Syncing Diary repository with the remote...\n"))
-		if err := diary.SyncToRemote(); err != nil {
-			stderr.Write([]byte("Failed to sync ❌\n"))
+		repo := diary.NewFilesystemRepository()
+
+		err := spinner.WithContext(c.Context, "Syncing Diary repository with remote...", repo.Commit,
+			spinner.WithSuccessMessage("Synced to remote"),
+			spinner.WithFailureMessage("Could not sync to remote"),
+		)
+		if err != nil {
 			return cli.Exit(err, 1)
 		}
 
-		stdout.Write([]byte("Synced ✅\n"))
 		return nil
 	}
 }
@@ -145,16 +149,17 @@ func handleDiaryTasks(stdout, stderr io.Writer) cli.ActionFunc {
 
 		// Show task count (following PR handler pattern)
 		print.Info(stdout,
-			print.ColorNote("Found"),
-			fmt.Sprintf("%d", len(tasks)),
-			"incomplete tasks:")
+			"Found",
+			print.ColorNote(fmt.Sprintf("%d", len(tasks))),
+			"incomplete tasks:",
+		)
 		print.Info(stdout) // Empty line for spacing
 
 		// Format for survey: "Task text (first seen: 2024-10-24)"
 		var options []string
 		for _, task := range tasks {
-			displayText := fmt.Sprintf("%s (first seen: %s)",
-				task.Text, task.FirstSeen.Format("2006-01-02"))
+			displayText := task.Text + print.ColorNote(fmt.Sprintf(" %s (%s)", print.Bullet,
+				task.FirstSeen.Format("2006-01-02")))
 			options = append(options, displayText)
 		}
 

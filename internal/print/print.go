@@ -12,6 +12,7 @@ const (
 	ErrorColor   = "e06c75" // darkRed from opencode theme
 	WarningColor = "f5a742" // darkOrange from opencode theme
 	InfoColor    = "56b6c2" // darkCyan from opencode theme
+	GrayColor    = "6c757d" // medium gray
 	ResetColor   = "\x1b[0m"
 )
 
@@ -37,6 +38,8 @@ func colorize(color, text string) string {
 		code = "33" // Yellow
 	case InfoColor:
 		code = "36" // Cyan
+	case GrayColor:
+		code = "90" // Bright Black (Dark Gray)
 	default:
 		return text
 	}
@@ -111,6 +114,11 @@ func ColorWarning(text string) string {
 // ColorNote returns a cyan colored string
 func ColorNote(text string) string {
 	return colorize(InfoColor, text)
+}
+
+// ColorSubtle returns a subtle gray colored string
+func ColorSubtle(text string) string {
+	return colorize(GrayColor, text)
 }
 
 // Wrap adds newlines before and after text

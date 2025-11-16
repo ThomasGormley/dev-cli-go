@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/thomasgormley/dev-cli-go/internal/git"
 )
 
 // Entry is a struct representation of a Diary Entry persisted to a File
@@ -107,6 +109,50 @@ func (r FSRepository) NewEntry() error {
 	// Write template to file
 	if err := os.WriteFile(filePath, []byte(template), 0644); err != nil {
 		return fmt.Errorf("failed to write entry file: %w", err)
+	}
+
+	return nil
+}
+
+func (r FSRepository) Commit(ctx context.Context) error {
+	docsDir := "docs"
+
+	// Check if docs directory exists
+	docsPath := path.Join(r.basePath, docsDir)
+	if _, err := os.Stat(docsPath); os.IsNotExist(err) {
+		return fmt.Errorf("directory %s does not exist", docsDir)
+	}
+
+	if err := os.Chdir(r.basePath); err != nil {
+		return fmt.Errorf("failed to change to repository directory: %w", err)
+	}
+	if err := git.Add(docsDir); err != nil {
+		return fmt.Errorf("failed to add changes to staging: %w", err)
+	}
+
+	hasChanges, err := git.HasUncommittedChanges(docsDir)
+	if err != nil {
+		return fmt.Errorf("failed to check for changes: %w", err)
+	}
+
+	if !hasChanges {
+		return nil // No changes to commit
+	}
+
+	// Get file status and create commit message
+	commitMessage, err := createCommitMessage(docsDir)
+	if err != nil {
+		return fmt.Errorf("failed to create commit message: %w", err)
+	}
+
+	// Commit the changes
+	if err := git.Commit(commitMessage); err != nil {
+		return fmt.Errorf("failed to commit changes: %w", err)
+	}
+
+	// Push to remote
+	if err := git.Push("origin", "main"); err != nil {
+		return fmt.Errorf("failed to push to remote repository: %w", err)
 	}
 
 	return nil
