@@ -22,30 +22,30 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 			return err
 		}
 
-		prStatus, err := ghCli.PRStatus("")
-		if err != nil {
-			// non critical error, just continue
-		}
+		// prStatus, err := ghCli.PRStatus("")
+		// if err != nil {
+		// 	// non critical error, just continue
+		// }
 
-		if prStatus.CurrentBranch.URL != "" && !prStatus.CurrentBranch.Closed {
-			print.Info(stdout,
-				print.ColorNote(print.InfoSym),
-				"Pull request already exists for this branch",
-			)
-			print.Info(stdout, print.WrapTop(
-				print.ColorNote("Title:"),
-				prStatus.CurrentBranch.Title,
-			))
-			print.Info(stdout, print.WrapBottom(
-				print.ColorNote("URL:"),
-				prStatus.CurrentBranch.URL,
-			))
+		// if !prStatus.CurrentBranch.Closed {
+		// 	print.Info(stdout,
+		// 		print.ColorNote(print.InfoSym),
+		// 		"Pull request already exists for this branch",
+		// 	)
+		// 	print.Info(stdout, print.WrapTop(
+		// 		print.ColorNote("Title:"),
+		// 		prStatus.CurrentBranch.Title,
+		// 	))
+		// 	print.Info(stdout, print.WrapBottom(
+		// 		print.ColorNote("URL:"),
+		// 		prStatus.CurrentBranch.URL,
+		// 	))
 
-			if err := promptForOpen(stdout, ghCli); err != nil {
-				return err
-			}
-			return cli.Exit("", 0)
-		}
+		// 	if err := promptForOpen(stdout, ghCli); err != nil {
+		// 		print.Warning(stdout, print.WarningSym, "Could not open PR in browser")
+		// 	}
+		// 	return cli.Exit("", 0)
+		// }
 
 		title, err := titleOrPrompt(c)
 		if err != nil {
