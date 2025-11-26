@@ -39,19 +39,27 @@ echo
 echo "✅ Installed $BINARY_NAME to $INSTALL_DIR successfully."
 echo
 # Add to shell config
-SHELL_RC="$HOME/.zshrc"
+# Determine which shell config file to use
+if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "/bin/zsh" ]; then
+    SHELL_RC="$HOME/.zshrc"
+elif [ -n "$BASH_VERSION" ] || [ "$SHELL" = "/bin/bash" ]; then
+    SHELL_RC="$HOME/.bashrc"
+else
+    # Default to .bashrc if we can't determine the shell
+    SHELL_RC="$HOME/.bashrc"
+fi
 
-
-# Check if already in PATH
-if ! grep -q "$INSTALL_DIR" "$SHELL_RC" 2>/dev/null; then
+# Check if already in PATH (both current PATH and shell config)
+if echo "$PATH" | grep -q "$INSTALL_DIR" && grep -q "\$HOME/.dev/bin" "$SHELL_RC" 2>/dev/null; then
+    echo "✅ Already in PATH"
+elif ! grep -q "\$HOME/.dev/bin" "$SHELL_RC" 2>/dev/null; then
     echo "📝 Adding to PATH in $SHELL_RC..."
     echo "" >> "$SHELL_RC"
     echo "# dev-cli" >> "$SHELL_RC"
-    echo "export DEV_INSTALL=\"$DEV_INSTALL\"" >> "$SHELL_RC"
-    echo "export PATH=\"\$DEV_INSTALL/bin:\$PATH\"" >> "$SHELL_RC"
+    echo "export PATH=\"\$HOME/.dev/bin:\$PATH\"" >> "$SHELL_RC"
     echo "✅ Added to PATH. Restart your shell or run: source $SHELL_RC"
 else
-    echo "✅ Already in PATH"
+    echo "✅ Already configured in shell config"
 fi
 echo
 

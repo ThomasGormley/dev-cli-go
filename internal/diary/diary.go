@@ -87,24 +87,9 @@ func (r FSRepository) NewEntry() error {
 		return fmt.Errorf("entry for %s already exists", date)
 	}
 
-	// Extract incomplete TODOs from previous entries
-	incompleteTasks, err := r.extractIncompleteTasks(today)
-	if err != nil {
-		return fmt.Errorf("failed to extract incomplete tasks: %w", err)
-	}
-
 	// Create basic template with carried over tasks
 	dayName := today.Format("Monday")
 	template := fmt.Sprintf("# %s %s\n\n", dayName, date)
-
-	// Add TODO section if there are incomplete tasks
-	if len(incompleteTasks) > 0 {
-		template += "## TODO\n\n"
-		for _, task := range incompleteTasks {
-			template += fmt.Sprintf("- [ ] %s\n", task.Text)
-		}
-		template += "\n"
-	}
 
 	// Write template to file
 	if err := os.WriteFile(filePath, []byte(template), 0644); err != nil {
