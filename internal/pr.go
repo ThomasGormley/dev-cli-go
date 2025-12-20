@@ -8,6 +8,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
+	"github.com/thomasgormley/dev-cli-go/internal/git"
 	"github.com/thomasgormley/dev-cli-go/internal/print"
 	"github.com/thomasgormley/dev-cli-go/internal/spinner"
 	"github.com/urfave/cli/v2"
@@ -15,7 +16,7 @@ import (
 
 func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		if !isGitRepo() {
+		if !git.IsRepo() {
 			print.Error(stderr, "Not a git repository")
 			return cli.Exit("", 1)
 		}
@@ -101,7 +102,7 @@ func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 		identifier := c.Args().First()
 
 		if identifier == "" {
-			branch, err := gitBranch()
+			branch, err := git.CurrentBranch()
 			if err != nil {
 				branch = "current branch"
 			}
@@ -123,7 +124,7 @@ func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 func bodyOrPRTemplate(c *cli.Context) (string, error) {
 	body := c.String("body")
 	if body == "" {
-		body = repoPRTemplate()
+		body = git.GetPRTemplate()
 	}
 	return body, nil
 }
@@ -141,7 +142,7 @@ func titleOrPrompt(c *cli.Context) (string, error) {
 }
 
 func promptForTitle() (string, error) {
-	branch, err := gitBranch()
+	branch, err := git.CurrentBranch()
 	if err != nil {
 		return "", err
 	}
