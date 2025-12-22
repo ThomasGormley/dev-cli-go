@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
@@ -139,8 +140,16 @@ func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 			print.Warning(stdout, print.WrapBottom("No open Pull Requests in this repository"))
 			return nil
 		}
-		for _, pr := range prs {
-			print.Note(stdout, pr.Title)
+
+		selected, action, err := promptPRList(stdout, prs)
+
+		if err != nil {
+			return err
+		}
+
+		switch action {
+		case "open":
+			return ghCli.ViewPR(fmt.Sprint(selected.Number))
 		}
 
 		return nil
@@ -204,6 +213,37 @@ func promptForOpen(stdout io.Writer, ghCli gh.GitHubClienter) error {
 	}
 
 	return nil
+}
+
+func promptPRList(stdout io.Writer, prs []gh.PullRequest) (gh.PullRequest, string, error) {
+	titles := make([]string, 0)
+	for _, pr := range prs {
+		titles = append(titles, pr.Title)
+	}
+	var selectedPRTitle string
+	prompt := &survey.Select{
+		Message: "Select a Pull Request",
+		Options: titles,
+	}
+
+	if err := survey.AskOne(prompt, &selectedPRTitle); err != nil {
+		return gh.PullRequest{}, "", err
+	}
+
+	var action string
+	actionPrompt := &survey.Select{
+		Message: "Select an action",
+		Options: []string{"open"},
+	}
+	if err := survey.AskOne(actionPrompt, &action); err != nil {
+		return gh.PullRequest{}, "", err
+	}
+
+	idx := slices.IndexFunc(prs, func(pr gh.PullRequest) bool {
+		return pr.Title == selectedPRTitle
+	})
+
+	return prs[idx], action, nil
 }
 
 func prTitleFromBranch(branch string) string {
