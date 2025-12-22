@@ -113,10 +113,10 @@ func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 // Copies the current branch, or identifier PR's URL as a shareable link
 func handlePRCopy(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		if !git.IsRepo() {
-			print.Error(stderr, "Not a git repository")
-			return cli.Exit("", 1)
+		if err := ensurePRContext(stdout, stderr, ghCli); err != nil {
+			return err
 		}
+
 		identifier := c.Args().First()
 		prStatus, err := ghCli.PRStatus(identifier)
 		if err != nil {
