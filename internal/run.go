@@ -64,6 +64,12 @@ func Run(
 						Aliases: []string{"v"},
 						Action:  handlePRView(stdout, stderr, ghClient),
 					},
+					{
+						Name:    "list",
+						Usage:   "List pull requests",
+						Aliases: []string{"l"},
+						Action:  handlePRList(stdout, stderr, ghClient),
+					},
 				},
 			},
 			{

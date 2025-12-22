@@ -121,6 +121,32 @@ func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 	}
 }
 
+func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
+	return func(c *cli.Context) error {
+
+		print.Info(stdout, print.WrapTop(
+			"Listing PRs for repo:",
+			print.ColorNote("foo"),
+		))
+
+		prs, err := ghCli.ListPRs()
+
+		if err != nil {
+			return err
+		}
+
+		if len(prs) == 0 {
+			print.Warning(stdout, print.WrapBottom("No open Pull Requests in this repository"))
+			return nil
+		}
+		for _, pr := range prs {
+			print.Note(stdout, pr.Title)
+		}
+
+		return nil
+	}
+}
+
 func bodyOrPRTemplate(c *cli.Context) (string, error) {
 	body := c.String("body")
 	if body == "" {
