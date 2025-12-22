@@ -16,7 +16,7 @@ func TestPrTitleFromBranch(t *testing.T) {
 	}
 	for _, test := range tests {
 		result := prTitleFromBranch(test.input)
-		if result == test.expected {
+		if result != test.expected {
 			t.Errorf("For input %q, expected %q, got %q", test.input, test.expected, result)
 		}
 	}
