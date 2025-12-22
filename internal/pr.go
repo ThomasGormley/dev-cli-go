@@ -35,7 +35,7 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 			// non critical error, just continue
 		}
 
-		if !prStatus.CurrentBranch.Closed {
+		if prStatus.CurrentBranch.URL != "" && !prStatus.CurrentBranch.Closed {
 			print.Info(stdout,
 				print.ColorNote(print.InfoSym),
 				"Pull request already exists for this branch",
