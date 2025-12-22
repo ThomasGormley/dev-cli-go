@@ -64,6 +64,12 @@ func Run(
 						Aliases: []string{"v"},
 						Action:  handlePRView(stdout, stderr, ghClient),
 					},
+					{
+						Name:    "copy",
+						Usage:   "Copy a pull request URL as a shareable link",
+						Aliases: []string{"c"},
+						Action:  handlePRCopy(stdout, stderr, ghClient),
+					},
 				},
 			},
 			{

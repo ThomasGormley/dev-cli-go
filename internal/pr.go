@@ -121,6 +121,33 @@ func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 	}
 }
 
+// Copies the current branch, or identifier PR's URL
+func handlePRCopy(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
+	return func(c *cli.Context) error {
+		if !git.IsRepo() {
+			print.Error(stderr, "Not a git repository")
+			return cli.Exit("", 1)
+		}
+		identifier := c.Args().First()
+		prStatus, err := ghCli.PRStatus(identifier)
+		if err != nil {
+			if identifier == "" {
+				print.Error(stderr, "No pull request found for this branch")
+				return cli.Exit("", 1)
+			}
+			print.Error(stderr, "No pull request found:", identifier)
+			return cli.Exit("", 1)
+		}
+		url := strings.TrimSpace(prStatus.CurrentBranch.URL)
+		if url == "" {
+			print.Error(stderr, "No pull request URL available")
+			return cli.Exit("", 1)
+		}
+		fmt.Fprintln(stdout, url)
+		return cli.Exit("", 0)
+	}
+}
+
 func bodyOrPRTemplate(c *cli.Context) (string, error) {
 	body := c.String("body")
 	if body == "" {
