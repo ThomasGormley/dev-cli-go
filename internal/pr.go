@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
+	"github.com/thomasgormley/dev-cli-go/internal/clipboard"
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/thomasgormley/dev-cli-go/internal/git"
 	"github.com/thomasgormley/dev-cli-go/internal/print"
@@ -121,7 +122,7 @@ func handlePRView(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 	}
 }
 
-// Copies the current branch, or identifier PR's URL
+// Copies the current branch, or identifier PR's URL as a shareable link
 func handlePRCopy(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		if !git.IsRepo() {
@@ -139,11 +140,23 @@ func handlePRCopy(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 			return cli.Exit("", 1)
 		}
 		url := strings.TrimSpace(prStatus.CurrentBranch.URL)
+		title := strings.TrimSpace(prStatus.CurrentBranch.Title)
+
 		if url == "" {
 			print.Error(stderr, "No pull request URL available")
 			return cli.Exit("", 1)
 		}
-		fmt.Fprintln(stdout, url)
+
+		// Copy link to clipboard in multiple formats (markdown + HTML)
+		if err := clipboard.CopyLink(title, url); err != nil {
+			// Fallback: print to stdout
+			print.Warning(stdout, print.WarningSym, "Could not access clipboard")
+			fmt.Fprintln(stdout, url)
+			return cli.Exit("", 0)
+		}
+
+		print.Success(stdout, print.Tick, "PR link copied to clipboard")
+
 		return cli.Exit("", 0)
 	}
 }
