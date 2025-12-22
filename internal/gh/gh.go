@@ -16,6 +16,7 @@ type GitHubClienter interface {
 	ViewPR(identifier string) error
 	PRStatus(identifier string) (PRStatusResponse, error)
 	MergePR(s MergeStrategy) error
+	ListPRs() ([]PullRequest, error)
 }
 
 type ghClient struct {
@@ -116,6 +117,16 @@ const (
 	MergeRebase MergeStrategy = "rebase"
 )
 
+type PullRequest struct {
+	Number      int    `json:"number"`
+	Title       string `json:"title"`
+	URL         string `json:"url"`
+	IsDraft     bool   `json:"isDraft"`
+	HeadRefName string `json:"headRefName"`
+	BaseRefName string `json:"baseRefName"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
 type PRStatusResponse struct {
 	CurrentBranch struct {
 		Closed       bool   `json:"closed"`
@@ -211,6 +222,43 @@ func (g *ghClient) MergePR(strategy MergeStrategy) error {
 
 	// cmd.Env = append(cmd.Env, "GH_PROMPT_DISABLED=true")
 	return cmd.Run()
+}
+
+func (g *ghClient) ListPRs() ([]PullRequest, error) {
+	repoCmd := g.prepareCmd("gh", "repo", "view", "--json", "nameWithOwner")
+	var repoOut bytes.Buffer
+	repoCmd.Stdout = &repoOut
+	if err := repoCmd.Run(); err != nil {
+		return nil, err
+	}
+
+	var repo struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	}
+	if err := json.Unmarshal(repoOut.Bytes(), &repo); err != nil {
+		return nil, err
+	}
+
+	args := []string{
+		"pr", "list",
+		"--repo", repo.NameWithOwner,
+		"--author", "@me",
+		"--state", "open",
+		"--json", "number,title,url,isDraft,headRefName,baseRefName,updatedAt",
+	}
+	cmd := g.prepareCmd("gh", args...)
+	var outBuffer bytes.Buffer
+	cmd.Stdout = &outBuffer
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+
+	var prs []PullRequest
+	if err := json.Unmarshal(outBuffer.Bytes(), &prs); err != nil {
+		return nil, err
+	}
+
+	return prs, nil
 }
 
 func (g *ghClient) prepareCmd(name string, args ...string) *exec.Cmd {
