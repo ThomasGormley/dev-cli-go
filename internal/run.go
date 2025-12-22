@@ -70,6 +70,12 @@ func Run(
 						Aliases: []string{"c"},
 						Action:  handlePRCopy(stdout, stderr, ghClient),
 					},
+					{
+						Name:    "list",
+						Usage:   "List pull requests",
+						Aliases: []string{"l"},
+						Action:  handlePRList(stdout, stderr, ghClient),
+					},
 				},
 			},
 			{
