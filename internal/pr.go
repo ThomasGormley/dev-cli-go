@@ -181,6 +181,10 @@ func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 			if err := openPRInBrowser(stdout, ghCli, fmt.Sprint(selected.Number)); err != nil {
 				return err
 			}
+		case PRCheckout:
+			if err := git.Checkout(selected.HeadRefName); err != nil {
+				return err
+			}
 		}
 
 		return nil
@@ -243,7 +247,8 @@ func promptForOpen(stdout io.Writer, ghCli gh.GitHubClienter) error {
 }
 
 const (
-	PROpen = "Open"
+	PROpen     = "Open"
+	PRCheckout = "Checkout"
 )
 
 func promptPRList(stdout io.Writer, prs []gh.PullRequest) (gh.PullRequest, string, error) {
@@ -264,7 +269,7 @@ func promptPRList(stdout io.Writer, prs []gh.PullRequest) (gh.PullRequest, strin
 	var action string
 	actionPrompt := &survey.Select{
 		Message: "Action",
-		Options: []string{PROpen},
+		Options: []string{PROpen, PRCheckout},
 	}
 	if err := survey.AskOne(actionPrompt, &action); err != nil {
 		return gh.PullRequest{}, "", err

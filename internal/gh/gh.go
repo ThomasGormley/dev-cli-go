@@ -15,7 +15,6 @@ type GitHubClienter interface {
 	CreatePR(title, body, base string, draft bool) error
 	ViewPR(identifier string) error
 	PRStatus(identifier string) (PRStatusResponse, error)
-	MergePR(s MergeStrategy) error
 	ListPRs() ([]PullRequest, error)
 }
 
@@ -201,27 +200,6 @@ func (g *ghClient) PRStatus(identifier string) (PRStatusResponse, error) {
 		return PRStatusResponse{}, fmt.Errorf("no pull request available")
 	}
 	return resp, nil
-}
-
-func (g *ghClient) MergePR(strategy MergeStrategy) error {
-	args := []string{"pr", "merge"}
-	switch strategy {
-	case MergeSquash:
-		args = append(args, "--squash")
-	case MergeCommit:
-		args = append(args, "--merge")
-	case MergeRebase:
-		args = append(args, "--rebase")
-	default:
-		return fmt.Errorf("missing or invalid merge strategy %s", strategy)
-	}
-	cmd := g.prepareCmd("gh", args...)
-	var outBuffer bytes.Buffer
-	cmd.Stdout = &outBuffer
-	cmd.Stdin = nil
-
-	// cmd.Env = append(cmd.Env, "GH_PROMPT_DISABLED=true")
-	return cmd.Run()
 }
 
 func (g *ghClient) ListPRs() ([]PullRequest, error) {
