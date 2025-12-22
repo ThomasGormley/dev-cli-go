@@ -18,18 +18,8 @@ import (
 
 func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		if !git.IsRepo() {
-			print.Error(stderr, "Not a git repository")
-			return cli.Exit("", 1)
-		}
-
-		if err := spinner.With("Checking GitHub authentication.", func() error {
-			return ghCli.AuthStatus()
-		}, spinner.WithWriter(stdout), spinner.WithFailureMessage("Not authenticated with GitHub CLI"), spinner.WithSuccessMessage("Authenticated")); err != nil {
-			print.Info(stdout, print.WrapBottom(
-				print.ColorNote("Run 'gh auth login' to authenticate"),
-			))
-			return cli.Exit("", 1)
+		if err := ensurePRContext(stdout, stderr, ghCli); err != nil {
+			return err
 		}
 
 		prStatus, err := ghCli.PRStatus("")
@@ -52,7 +42,7 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 			))
 
 			if err := promptForOpen(stdout, ghCli); err != nil {
-				print.Warning(stdout, print.WarningSym, "Could not open PR in browser")
+				return err
 			}
 			return cli.Exit("", 0)
 		}
@@ -89,10 +79,7 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 		}
 
 		if err := promptForOpen(stdout, ghCli); err != nil {
-			print.Warning(stdout, print.Wrap(
-				print.WarningSym,
-				"Could not open PR in browser",
-			))
+			return err
 		}
 
 		return cli.Exit("", 0)
@@ -164,19 +151,22 @@ func handlePRCopy(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 
 func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
-
-		print.Info(stdout, print.Wrap(
-			"Listing Pull Requests for repository",
-		))
-
-		prs, err := ghCli.ListPRs()
-
-		if err != nil {
+		if err := ensurePRContext(stdout, stderr, ghCli); err != nil {
 			return err
 		}
 
+		var prs []gh.PullRequest
+		err := spinner.With("Fetching pull requests", func() error {
+			var fetchErr error
+			prs, fetchErr = ghCli.ListPRs()
+			return fetchErr
+		}, spinner.WithWriter(stdout), spinner.WithFailureMessage("Failed to fetch pull requests"), spinner.WithSuccessMessage("Pull requests fetched"))
+		if err != nil {
+			return cli.Exit("", 1)
+		}
+
 		if len(prs) == 0 {
-			print.Warning(stdout, print.WrapBottom("No open Pull Requests in this repository"))
+			print.Warning(stdout, print.Wrap("No open Pull Requests in this repository"))
 			return nil
 		}
 
@@ -187,8 +177,10 @@ func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 		}
 
 		switch action {
-		case "open":
-			return ghCli.ViewPR(fmt.Sprint(selected.Number))
+		case PROpen:
+			if err := openPRInBrowser(stdout, ghCli, fmt.Sprint(selected.Number)); err != nil {
+				return err
+			}
 		}
 
 		return nil
@@ -244,15 +236,15 @@ func promptForOpen(stdout io.Writer, ghCli gh.GitHubClienter) error {
 	}
 
 	if openInBrowser {
-		print.Info(stdout, print.Wrap(
-			print.Arrow,
-			"Opening pull request in browser...",
-		))
-		return ghCli.ViewPR("")
+		return openPRInBrowser(stdout, ghCli, "")
 	}
 
 	return nil
 }
+
+const (
+	PROpen = "Open"
+)
 
 func promptPRList(stdout io.Writer, prs []gh.PullRequest) (gh.PullRequest, string, error) {
 	titles := make([]string, 0)
@@ -261,7 +253,7 @@ func promptPRList(stdout io.Writer, prs []gh.PullRequest) (gh.PullRequest, strin
 	}
 	var selectedPRTitle string
 	prompt := &survey.Select{
-		Message: "Select a Pull Request",
+		Message: "Pull Request",
 		Options: titles,
 	}
 
@@ -271,8 +263,8 @@ func promptPRList(stdout io.Writer, prs []gh.PullRequest) (gh.PullRequest, strin
 
 	var action string
 	actionPrompt := &survey.Select{
-		Message: "Select an action",
-		Options: []string{"open"},
+		Message: "Action",
+		Options: []string{PROpen},
 	}
 	if err := survey.AskOne(actionPrompt, &action); err != nil {
 		return gh.PullRequest{}, "", err
@@ -302,4 +294,37 @@ func prTitleFromBranch(branch string) string {
 	}
 
 	return fmt.Sprintf("%s: %s", t, d)
+}
+
+func ensurePRContext(stdout, stderr io.Writer, ghCli gh.GitHubClienter) error {
+	if !git.IsRepo() {
+		print.Error(stderr, "Not a git repository")
+		return cli.Exit("", 1)
+	}
+
+	if err := spinner.With("Checking GitHub authentication.", func() error {
+		return ghCli.AuthStatus()
+	}, spinner.WithWriter(stdout), spinner.WithFailureMessage("Not authenticated with GitHub CLI"), spinner.WithSuccessMessage("Authenticated")); err != nil {
+		print.Info(stdout, print.WrapBottom(
+			print.ColorNote("Run 'gh auth login' to authenticate"),
+		))
+		return cli.Exit("", 1)
+	}
+
+	return nil
+}
+
+func openPRInBrowser(stdout io.Writer, ghCli gh.GitHubClienter, identifier string) error {
+	print.Info(stdout, print.Wrap(
+		print.Arrow,
+		"Opening pull request in browser...",
+	))
+	if err := ghCli.ViewPR(identifier); err != nil {
+		print.Warning(stdout, print.Wrap(
+			print.WarningSym,
+			"Could not open PR in browser",
+		))
+		return cli.Exit("", 1)
+	}
+	return nil
 }
