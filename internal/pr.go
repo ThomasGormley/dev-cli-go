@@ -165,9 +165,8 @@ func handlePRCopy(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
 	return func(c *cli.Context) error {
 
-		print.Info(stdout, print.WrapTop(
-			"Listing PRs for repo:",
-			print.ColorNote("foo"),
+		print.Info(stdout, print.Wrap(
+			"Listing Pull Requests for repository",
 		))
 
 		prs, err := ghCli.ListPRs()
