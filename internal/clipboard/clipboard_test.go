@@ -1,6 +1,7 @@
 package clipboard
 
 import (
+	"runtime"
 	"testing"
 )
 
@@ -140,3 +141,20 @@ func TestEscapeAppleScript(t *testing.T) {
 
 // Note: CopyLink() and copyMultiFormat() are not easily testable in unit tests
 // as they require actual clipboard access via osascript. These should be tested manually.
+
+func TestGet(t *testing.T) {
+	content, err := Get()
+	if err != nil {
+		t.Skipf("Skipping test on %s: clipboard access not available", runtime.GOOS)
+	}
+
+	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+		if content == "" {
+			t.Log("Clipboard is empty, which is a valid state")
+		} else {
+			t.Logf("Successfully read clipboard content: %q", content)
+		}
+	} else {
+		t.Skipf("Skipping test: unsupported OS %s", runtime.GOOS)
+	}
+}

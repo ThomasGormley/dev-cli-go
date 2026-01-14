@@ -98,15 +98,15 @@ func Run(
 						Action:  handleDiaryOpen(stdout, stderr),
 					},
 					{
+						Name:    "paste",
+						Usage:   "Append clipboard contents to today's diary entry",
+						Aliases: []string{"p"},
+						Action:  handleDiaryPaste(stdout, stderr),
+					},
+					{
 						Name:   "sync",
 						Usage:  "Sync diary entries to remote",
 						Action: handleDiarySync(stdout, stderr),
-					},
-					{
-						Name:    "tasks",
-						Usage:   "Manage incomplete diary tasks",
-						Aliases: []string{"t"},
-						Action:  handleDiaryTasks(stdout, stderr),
 					},
 				},
 			},

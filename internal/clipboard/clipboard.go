@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -57,4 +58,33 @@ func escapeAppleScript(s string) string {
 	s = strings.ReplaceAll(s, "\n", "\\n")
 	s = strings.ReplaceAll(s, "\r", "\\r")
 	return s
+}
+
+// Get retrieves the current clipboard contents
+func Get() (string, error) {
+	var cmd *exec.Cmd
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("pbpaste")
+	case "linux":
+		if _, err := exec.LookPath("xclip"); err == nil {
+			cmd = exec.Command("xclip", "-selection", "clipboard", "-o")
+		} else if _, err := exec.LookPath("xsel"); err == nil {
+			cmd = exec.Command("xsel", "--clipboard", "--output")
+		} else if _, err := exec.LookPath("wl-paste"); err == nil {
+			cmd = exec.Command("wl-paste")
+		} else {
+			return "", fmt.Errorf("no clipboard utility found. Please install pbpaste (macOS), xclip, xsel, or wl-paste (Linux)")
+		}
+	default:
+		return "", fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+	}
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to read clipboard: %w", err)
+	}
+
+	return string(output), nil
 }

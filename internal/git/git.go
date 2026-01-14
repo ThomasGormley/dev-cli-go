@@ -138,6 +138,19 @@ func Pull() error {
 	return exec.Command("git", "pull").Run()
 }
 
+func PullRebase() error {
+	return exec.Command("git", "pull", "--rebase").Run()
+}
+
+func RebaseAbort() error {
+	cmd := exec.Command("git", "rebase", "--abort")
+	err := cmd.Run()
+	if err != nil && !strings.Contains(err.Error(), "no rebase in progress") {
+		return err
+	}
+	return nil
+}
+
 // CreateBranch creates and switches to a new branch
 func CreateBranch(branch string) error {
 	return exec.Command("git", "checkout", "-b", branch).Run()
