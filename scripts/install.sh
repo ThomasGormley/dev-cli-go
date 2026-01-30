@@ -34,7 +34,7 @@ if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
 fi
 
 # Copy the binary to the installation directory
-cp "$BINARY_LOCATION" "$INSTALL_DIR"
+cp "$DIR_BINARY" "$INSTALL_DIR"
 echo
 echo "✅ Installed $BINARY_NAME to $INSTALL_DIR successfully."
 echo
