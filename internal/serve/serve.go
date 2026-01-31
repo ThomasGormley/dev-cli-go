@@ -75,6 +75,10 @@ type Comment struct {
 	Reactions       []Reaction `json:"reactions,omitempty"`
 }
 
+func (c Comment) IsReviewComment() bool {
+	return c.FilePath != ""
+}
+
 type PRDetails struct {
 	Number     int       `json:"number"`
 	Title      string    `json:"title"`
@@ -291,7 +295,7 @@ func createOpencodeSession(ctx context.Context, repoPath string) (*opencode.Clie
 }
 
 func react(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR) error {
-	isReviewComment := c.FilePath != ""
+	isReviewComment := c.IsReviewComment()
 	log.Printf("adding eyes reaction to comment %d (review: %v)", c.ID, isReviewComment)
 	if isReviewComment {
 		if err := ghClient.CreatePullRequestCommentReaction(ctx, prInfo.Owner, prInfo.Repo, c.ID, "eyes"); err != nil {
@@ -314,20 +318,16 @@ func prompt(c Comment, prDetails PRDetails) string {
 	prContext := prContext(prDetails, c.ID)
 	prFiles := prFiles(prDetails)
 
-	isReviewComment := c.FilePath != ""
-
-	if isReviewComment {
-		var commentContext string
-		if c.DiffHunk != "" {
-			commentContext = fmt.Sprintf("You are reviewing a comment on file \"%s\" at line %d.\n\nDiff context:\n%s", c.FilePath, c.Line, c.DiffHunk)
-		} else {
-			commentContext = fmt.Sprintf("You are reviewing a comment on file \"%s\" at line %d.", c.FilePath, c.Line)
-		}
-
-		return fmt.Sprintf("%s\n\n%s\n\n%s", body, prContext, commentContext)
+	if !c.IsReviewComment() {
+		return fmt.Sprintf("%s\n\n%s\n\n%s", body, prContext, prFiles)
 	}
 
-	return fmt.Sprintf("%s\n\n%s\n\n%s", body, prContext, prFiles)
+	commentContext := fmt.Sprintf("You are reviewing a comment on file \"%s\" at line %d.", c.FilePath, c.Line)
+	if c.DiffHunk != "" {
+		commentContext = fmt.Sprintf("You are reviewing a comment on file \"%s\" at line %d.\n\nDiff context:\n%s", c.FilePath, c.Line, c.DiffHunk)
+	}
+
+	return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s", commentContext, body, prContext, prFiles)
 }
 
 func prFiles(prDetails PRDetails) string {
@@ -353,7 +353,7 @@ func prContext(prDetails PRDetails, currentCommentID int64) string {
 			continue
 		}
 		var location string
-		if cm.FilePath != "" {
+		if cm.IsReviewComment() {
 			location = fmt.Sprintf(" (%s:%d)", cm.FilePath, cm.Line)
 		}
 		prevComments = append(prevComments, fmt.Sprintf("- %s at %s%s: %s", cm.Author, cm.CreatedAt, location, cm.Body))
@@ -396,7 +396,7 @@ func commit(repo git.Repo, branch string, commitMessage string) error {
 func comment(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR, replyText string) error {
 	log.Printf("creating comment to PR %d", prInfo.Number)
 	var err error
-	isReviewComment := c.FilePath != ""
+	isReviewComment := c.IsReviewComment()
 	if isReviewComment {
 		log.Printf("creating review reply to comment %d", c.ID)
 		err = ghClient.CreateReviewCommentReply(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID, replyText)

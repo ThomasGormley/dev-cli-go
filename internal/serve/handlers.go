@@ -130,7 +130,7 @@ func handlerAgentDispatch(ghClient *githubapi.Client, user string) http.Handler 
 			}
 
 			var commentURL string
-			if c.FilePath != "" {
+			if c.IsReviewComment() {
 				commentURL = fmt.Sprintf("https://github.com/%s/%s/pull/%d#discussion_r%d", prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID)
 			} else {
 				commentURL = fmt.Sprintf("https://github.com/%s/%s/pull/%d#issuecomment-%d", prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID)
