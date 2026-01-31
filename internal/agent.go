@@ -26,7 +26,7 @@ func handleAgentDispatch(client *http.Client) cli.ActionFunc {
 			return fmt.Errorf("encoding body: %w", err)
 		}
 
-		reqUrl := fmt.Sprintf("http://%s:%s/api/agent/dispatch", defaultHost, defaultPort)
+		reqUrl := baseURL + "/api/agent/dispatch"
 		req, err := http.NewRequest("POST", reqUrl, bytes.NewReader(bodyBytes))
 		if err != nil {
 			return fmt.Errorf("creating request: %w", err)

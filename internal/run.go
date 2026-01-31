@@ -15,6 +15,7 @@ import (
 const (
 	defaultPort = "1967"
 	defaultHost = "localhost"
+	baseURL     = "http://" + defaultHost + ":" + defaultPort
 )
 
 func Run(
