@@ -139,3 +139,34 @@ func (c *Client) GetPullRequestDetails(ctx context.Context, owner, repo string, 
 
 	return pr, issueComments, reviewComments, nil
 }
+
+func (c *Client) CreateComment(ctx context.Context, owner, repo string, number int, body string) error {
+	_, _, err := c.client.Issues.CreateComment(ctx, owner, repo, number, &github.IssueComment{
+		Body: github.Ptr(body),
+	})
+	return err
+}
+
+func (c *Client) CreateReviewReply(ctx context.Context, owner, repo string, prNumber, commentID int64, body string) string {
+	return ""
+}
+
+func (c *Client) CreateReaction(ctx context.Context, owner, repo string, commentID int64, reaction string) error {
+	_, _, err := c.client.Reactions.CreateIssueCommentReaction(ctx, owner, repo, commentID, reaction)
+	return err
+}
+
+func (c *Client) CreatePullRequestCommentReaction(ctx context.Context, owner, repo string, commentID int64, reaction string) error {
+	_, _, err := c.client.Reactions.CreatePullRequestCommentReaction(ctx, owner, repo, commentID, reaction)
+	return err
+}
+
+func (c *Client) CreateReviewCommentReply(ctx context.Context, owner, repo string, prNumber int, commentID int64, body string) error {
+	url := fmt.Sprintf("repos/%s/%s/pulls/%d/comments/%d/replies", owner, repo, prNumber, commentID)
+	req, err := c.client.NewRequest("POST", url, map[string]string{"body": body})
+	if err != nil {
+		return err
+	}
+	_, err = c.client.Do(ctx, req, nil)
+	return err
+}

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -382,12 +383,62 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 
 		var agentReplies []agentReply
 		for _, c := range actionable {
+			log.Printf("adding eyes reaction to comment %d (diffHunk: %s)", c.ID, c.DiffHunk)
+			if c.DiffHunk != "" {
+				if err := ghClient.CreatePullRequestCommentReaction(r.Context(), prInfo.Owner, prInfo.Repo, c.ID, "eyes"); err != nil {
+					log.Printf("failed to add PR comment reaction: %v", err)
+				} else {
+					log.Printf("PR comment reaction added successfully")
+				}
+			} else {
+				if err := ghClient.CreateReaction(r.Context(), prInfo.Owner, prInfo.Repo, c.ID, "eyes"); err != nil {
+					log.Printf("failed to add reaction: %v", err)
+				} else {
+					log.Printf("reaction added successfully")
+				}
+			}
 			promptText := strings.TrimSpace(strings.TrimPrefix(c.Body, "@"+c.Author))
 			replyText, err := chat(r.Context(), client, session.ID, promptText, repoPath, []PromptFile{})
 			if err != nil {
 				log.Printf("failed to send prompt: %v", err)
 				continue
 			}
+
+			if cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain"); cmd != nil {
+				out, err := cmd.CombinedOutput()
+				status := strings.TrimSpace(string(out))
+				log.Printf("git status output: %s", status)
+				if err == nil && len(status) > 0 {
+					log.Printf("branch dirty, pushing changes")
+					summary, err := chat(r.Context(), client, session.ID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), repoPath, []PromptFile{})
+					if err != nil {
+						summary = "auto"
+					}
+					if err := exec.Command("git", "-C", repoPath, "add", ".").Run(); err != nil {
+						log.Printf("failed to add: %v", err)
+					}
+					if err := exec.Command("git", "-C", repoPath, "commit", "-m", strings.TrimSpace(summary)).Run(); err != nil {
+						log.Printf("failed to commit: %v", err)
+					}
+					if err := exec.Command("git", "-C", repoPath, "push", "-u", "origin", branch).Run(); err != nil {
+						log.Printf("failed to push: %v", err)
+					}
+				}
+			}
+			log.Printf("creating comment to PR %d", prInfo.Number)
+			var postErr error
+			if c.DiffHunk != "" {
+				log.Printf("creating review reply to comment %d", c.ID)
+				postErr = ghClient.CreateReviewCommentReply(r.Context(), prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID, replyText)
+			} else {
+				postErr = ghClient.CreateComment(r.Context(), prInfo.Owner, prInfo.Repo, prInfo.Number, replyText)
+			}
+			if postErr != nil {
+				log.Printf("failed to create comment: %v", postErr)
+			} else {
+				log.Printf("comment created successfully")
+			}
+
 			agentReplies = append(agentReplies, agentReply{
 				CommentID: fmt.Sprintf("%d", c.ID),
 				Reply:     replyText,
