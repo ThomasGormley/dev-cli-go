@@ -115,29 +115,121 @@ func (c *Client) SearchMentions(ctx context.Context, username string, since time
 	return result.Issues, nil
 }
 
-func (c *Client) GetPullRequestDetails(ctx context.Context, owner, repo string, number int) (*github.PullRequest, []*github.IssueComment, []*github.PullRequestComment, error) {
-	pr, _, err := c.client.PullRequests.Get(ctx, owner, repo, number)
-	if err != nil {
-		return nil, nil, nil, err
+type Reaction struct {
+	Content string `json:"content"`
+	User    string `json:"user"`
+}
+
+type GraphQLComment struct {
+	DatabaseID int64  `json:"databaseId"`
+	Body       string `json:"body"`
+	Author     struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	CreatedAt    string     `json:"createdAt"`
+	Reactions    []Reaction `json:"reactions"`
+	IsReview     bool       `json:"-"`
+	DiffHunk     string     `json:"-"`
+	Path         string     `json:"path"`
+	Line         int        `json:"line"`
+	StartLine    int        `json:"startLine"`
+	OriginalLine int        `json:"originalLine"`
+}
+
+type GraphQLPRResponse struct {
+	Repository struct {
+		PullRequest struct {
+			Title       string `json:"title"`
+			HeadRefName string `json:"headRefName"`
+			Author      struct {
+				Login string `json:"login"`
+			} `json:"author"`
+			Comments struct {
+				Nodes []GraphQLComment `json:"nodes"`
+			} `json:"comments"`
+			Reviews struct {
+				Nodes []struct {
+					Author struct {
+						Login string `json:"login"`
+					} `json:"author"`
+					Comments struct {
+						Nodes []GraphQLComment `json:"nodes"`
+					} `json:"comments"`
+				} `json:"nodes"`
+			} `json:"reviews"`
+		} `json:"pullRequest"`
+	} `json:"repository"`
+}
+
+func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number int) (*GraphQLPRResponse, error) {
+	query := `query($owner: String!, $repo: String!, $number: Int!) {
+		repository(owner: $owner, name: $repo) {
+			pullRequest(number: $number) {
+				title
+				headRefName
+				author { login }
+				comments(first: 100) {
+					nodes {
+						databaseId
+						body
+						author { login }
+						createdAt
+						reactions(first: 100) {
+							nodes {
+								content
+								user { login }
+							}
+						}
+					}
+				}
+				reviews(first: 100) {
+					nodes {
+						author { login }
+						comments(first: 100) {
+							nodes {
+								databaseId
+								body
+								path
+								line
+								startLine
+								originalLine
+								author { login }
+								createdAt
+								reactions(first: 100) {
+									nodes {
+										content
+										user { login }
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}`
+
+	variables := map[string]interface{}{
+		"owner":  owner,
+		"repo":   repo,
+		"number": number,
 	}
 
-	opts := &github.IssueListCommentsOptions{
-		ListOptions: github.ListOptions{PerPage: 100},
-	}
-	issueComments, _, err := c.client.Issues.ListComments(ctx, owner, repo, number, opts)
-	if err != nil {
-		return pr, nil, nil, err
+	body := map[string]interface{}{
+		"query":     query,
+		"variables": variables,
 	}
 
-	prOpts := &github.PullRequestListCommentsOptions{
-		ListOptions: github.ListOptions{PerPage: 100},
-	}
-	reviewComments, _, err := c.client.PullRequests.ListComments(ctx, owner, repo, number, prOpts)
+	req, err := c.client.NewRequest("POST", "graphql", body)
 	if err != nil {
-		return pr, issueComments, nil, err
+		return nil, err
 	}
 
-	return pr, issueComments, reviewComments, nil
+	var resp struct {
+		Data GraphQLPRResponse `json:"data"`
+	}
+	_, err = c.client.Do(ctx, req, &resp)
+	return &resp.Data, err
 }
 
 func (c *Client) CreateComment(ctx context.Context, owner, repo string, number int, body string) error {

@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/go-github/v69/github"
 	opencode "github.com/sst/opencode-sdk-go"
 	"github.com/sst/opencode-sdk-go/option"
 	"github.com/thomasgormley/dev-cli-go/internal/git"
@@ -24,18 +23,24 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+type Reaction struct {
+	Content string `json:"content"`
+	User    string `json:"user"`
+}
+
 type Comment struct {
-	ID              int64  `json:"id"`
-	Author          string `json:"author"`
-	Body            string `json:"body"`
-	CreatedAt       string `json:"createdAt"`
-	ParentCommentID int64  `json:"parentCommentId,omitempty"`
-	DiffHunk        string `json:"diffHunk,omitempty"`
-	FilePath        string `json:"filePath,omitempty"`
-	Line            int    `json:"line,omitempty"`
-	StartLine       int    `json:"startLine,omitempty"`
-	OriginalLine    int    `json:"originalLine,omitempty"`
-	OriginalPos     int    `json:"originalPos,omitempty"`
+	ID              int64      `json:"id"`
+	Author          string     `json:"author"`
+	Body            string     `json:"body"`
+	CreatedAt       string     `json:"createdAt"`
+	ParentCommentID int64      `json:"parentCommentId,omitempty"`
+	DiffHunk        string     `json:"diffHunk,omitempty"`
+	FilePath        string     `json:"filePath,omitempty"`
+	Line            int        `json:"line,omitempty"`
+	StartLine       int        `json:"startLine,omitempty"`
+	OriginalLine    int        `json:"originalLine,omitempty"`
+	OriginalPos     int        `json:"originalPos,omitempty"`
+	Reactions       []Reaction `json:"reactions,omitempty"`
 }
 
 type PRDetails struct {
@@ -73,55 +78,49 @@ func parseGitHubPRURL(url string) (GitHubPR, error) {
 	}, nil
 }
 
-func parsePRDetails(pr *github.PullRequest, issueComments []*github.IssueComment, reviewComments []*github.PullRequestComment) PRDetails {
+func parseGraphQLPR(data *githubapi.GraphQLPRResponse) PRDetails {
 	var comments []Comment
-
-	for _, ic := range issueComments {
+	for _, c := range data.Repository.PullRequest.Comments.Nodes {
 		comments = append(comments, Comment{
-			ID:        ic.GetID(),
-			Author:    ic.GetUser().GetLogin(),
-			Body:      ic.GetBody(),
-			CreatedAt: ic.GetCreatedAt().Format(time.RFC3339),
+			ID:        c.DatabaseID,
+			Author:    c.Author.Login,
+			Body:      c.Body,
+			CreatedAt: c.CreatedAt,
+			Reactions: convertReactions(c.Reactions),
 		})
 	}
-
-	for _, rc := range reviewComments {
-		parentID := int64(0)
-		if replyTo := rc.GetInReplyTo(); replyTo > 0 {
-			parentID = replyTo
+	for _, review := range data.Repository.PullRequest.Reviews.Nodes {
+		for _, c := range review.Comments.Nodes {
+			comments = append(comments, Comment{
+				ID:           c.DatabaseID,
+				Author:       c.Author.Login,
+				Body:         c.Body,
+				CreatedAt:    c.CreatedAt,
+				FilePath:     c.Path,
+				Line:         c.Line,
+				StartLine:    c.StartLine,
+				OriginalLine: c.OriginalLine,
+				Reactions:    convertReactions(c.Reactions),
+			})
 		}
-		comments = append(comments, Comment{
-			ID:              rc.GetID(),
-			Author:          rc.GetUser().GetLogin(),
-			Body:            rc.GetBody(),
-			CreatedAt:       rc.GetCreatedAt().Format(time.RFC3339),
-			ParentCommentID: parentID,
-			DiffHunk:        rc.GetDiffHunk(),
-			FilePath:        rc.GetPath(),
-			Line:            int(rc.GetLine()),
-			StartLine:       int(rc.GetStartLine()),
-			OriginalLine:    int(rc.GetOriginalLine()),
-		})
 	}
-
-	author := ""
-	if pr.User != nil {
-		author = pr.User.GetLogin()
-	}
-
 	return PRDetails{
-		Number:     pr.GetNumber(),
-		Title:      pr.GetTitle(),
-		BaseBranch: pr.GetBase().GetRef(),
-		HeadBranch: pr.GetHead().GetRef(),
-		Author:     author,
-		State:      pr.GetState(),
-		IsDraft:    pr.GetDraft(),
-		CreatedAt:  pr.GetCreatedAt().Format(time.RFC3339),
-		UpdatedAt:  pr.GetUpdatedAt().Format(time.RFC3339),
-		URL:        pr.GetHTMLURL(),
+		Title:      data.Repository.PullRequest.Title,
+		HeadBranch: data.Repository.PullRequest.HeadRefName,
+		Author:     data.Repository.PullRequest.Author.Login,
 		Comments:   comments,
 	}
+}
+
+func convertReactions(reactions []githubapi.Reaction) []Reaction {
+	var r []Reaction
+	for _, rc := range reactions {
+		r = append(r, Reaction{
+			Content: rc.Content,
+			User:    rc.User,
+		})
+	}
+	return r
 }
 
 type GitHubPR struct {
@@ -308,71 +307,34 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 
 		log.Printf("PR: owner=%s repo=%s number=%d", prInfo.Owner, prInfo.Repo, prInfo.Number)
 
-		cachePath := filepath.Join(".cache", fmt.Sprintf("pr%d.json", prInfo.Number))
-		var prDetails PRDetails
-
-		if req.CacheBust {
-			log.Print("cache bust: fetching real data")
-			pr, issueComments, reviewComments, err := ghClient.GetPullRequestDetails(r.Context(), prInfo.Owner, prInfo.Repo, prInfo.Number)
-			if err != nil {
-				encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
-			}
-			prDetails = parsePRDetails(pr, issueComments, reviewComments)
-			os.MkdirAll(filepath.Dir(cachePath), 0755)
-			cacheData, _ := json.MarshalIndent(prDetails, "", "  ")
-			os.WriteFile(cachePath, cacheData, 0644)
-			log.Printf("cache updated: %s", cachePath)
-		} else {
-			if data, err := os.ReadFile(cachePath); err == nil {
-				log.Printf("cache hit: %s", cachePath)
-				json.Unmarshal(data, &prDetails)
-			} else {
-				log.Print("cache miss: fetching real data")
-				pr, issueComments, reviewComments, err := ghClient.GetPullRequestDetails(r.Context(), prInfo.Owner, prInfo.Repo, prInfo.Number)
-				if err != nil {
-					encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-					return
-				}
-				prDetails = parsePRDetails(pr, issueComments, reviewComments)
-			}
+		prDetails, err := fetchPRDetails(r.Context(), ghClient, prInfo, req.CacheBust)
+		if err != nil {
+			encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
 		}
 
-		var actionable []Comment
-		for _, c := range prDetails.Comments {
-			if c.Author == "ThomasGormley" && strings.Contains(c.Body, "@ThomasGormley") {
-				actionable = append(actionable, c)
-			}
+		if prDetails.Author != "ThomasGormley" {
+			encode(w, http.StatusForbidden, map[string]string{"error": "PR author is not authorized"})
+			return
 		}
 
-		repoPath := filepath.Join(os.Getenv("HOME"), ".devagent/repos", prInfo.Owner, prInfo.Repo)
+		actionable := filterActionableComments(prDetails.Comments)
+
 		branch := prDetails.HeadBranch
-
-		if _, err := os.Stat(repoPath); err == nil {
-			git.Fetch(repoPath)
-			git.CheckoutIn(branch, repoPath)
-			git.ResetHardIn("origin/"+branch, repoPath)
-		} else {
-			os.MkdirAll(filepath.Dir(repoPath), 0755)
-			cloneURL := fmt.Sprintf("git@github.com:%s/%s.git", prInfo.Owner, prInfo.Repo)
-			git.Clone(cloneURL, branch, repoPath)
+		repoPath, err := ensureRepo(prInfo, branch)
+		if err != nil {
+			encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
 		}
 
-		opencodeBaseURL := os.Getenv("OPENCODE_BASE_URL")
-		if opencodeBaseURL == "" {
-			opencodeBaseURL = "http://localhost:3366"
-		}
-		client := opencode.NewClient(option.WithBaseURL(opencodeBaseURL))
-		session, err := client.Session.New(r.Context(), opencode.SessionNewParams{
-			Directory: opencode.String(repoPath),
-		})
+		opencodeClient, sessionID, err := createOpencodeSession(r.Context(), repoPath)
 		if err != nil {
 			encode(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to create session: %v", err)})
 			return
 		}
 
 		go func() {
-			stream := client.Event.ListStreaming(context.Background(), opencode.EventListParams{})
+			stream := opencodeClient.Event.ListStreaming(context.Background(), opencode.EventListParams{})
 			for stream.Next() {
 				event := stream.Current()
 				if event.Type == opencode.EventListResponseTypeSessionIdle {
@@ -383,75 +345,193 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 
 		var agentReplies []agentReply
 		for _, c := range actionable {
-			log.Printf("adding eyes reaction to comment %d (diffHunk: %s)", c.ID, c.DiffHunk)
-			if c.DiffHunk != "" {
-				if err := ghClient.CreatePullRequestCommentReaction(r.Context(), prInfo.Owner, prInfo.Repo, c.ID, "eyes"); err != nil {
-					log.Printf("failed to add PR comment reaction: %v", err)
-				} else {
-					log.Printf("PR comment reaction added successfully")
-				}
-			} else {
-				if err := ghClient.CreateReaction(r.Context(), prInfo.Owner, prInfo.Repo, c.ID, "eyes"); err != nil {
-					log.Printf("failed to add reaction: %v", err)
-				} else {
-					log.Printf("reaction added successfully")
-				}
+			if isAlreadyProcessed(c, "ThomasGormley") {
+				log.Printf("comment %d already processed, skipping", c.ID)
+				continue
 			}
-			promptText := strings.TrimSpace(strings.TrimPrefix(c.Body, "@"+c.Author))
-			replyText, err := chat(r.Context(), client, session.ID, promptText, repoPath, []PromptFile{})
+
+			addCommentReaction(r.Context(), ghClient, c, prInfo)
+
+			promptText := getPromptFromComment(c)
+			replyText, err := getAgentReply(r.Context(), opencodeClient, sessionID, promptText, repoPath)
 			if err != nil {
 				log.Printf("failed to send prompt: %v", err)
 				continue
 			}
 
-			if cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain"); cmd != nil {
-				out, err := cmd.CombinedOutput()
-				status := strings.TrimSpace(string(out))
-				log.Printf("git status output: %s", status)
-				if err == nil && len(status) > 0 {
-					log.Printf("branch dirty, pushing changes")
-					summary, err := chat(r.Context(), client, session.ID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), repoPath, []PromptFile{})
-					if err != nil {
-						summary = "auto"
-					}
-					if err := exec.Command("git", "-C", repoPath, "add", ".").Run(); err != nil {
-						log.Printf("failed to add: %v", err)
-					}
-					if err := exec.Command("git", "-C", repoPath, "commit", "-m", strings.TrimSpace(summary)).Run(); err != nil {
-						log.Printf("failed to commit: %v", err)
-					}
-					if err := exec.Command("git", "-C", repoPath, "push", "-u", "origin", branch).Run(); err != nil {
-						log.Printf("failed to push: %v", err)
-					}
-				}
+			if commitRepoChanges(r.Context(), opencodeClient, sessionID, replyText, repoPath, branch) != nil {
+				log.Printf("failed to commit repo changes")
 			}
-			log.Printf("creating comment to PR %d", prInfo.Number)
-			var postErr error
-			if c.DiffHunk != "" {
-				log.Printf("creating review reply to comment %d", c.ID)
-				postErr = ghClient.CreateReviewCommentReply(r.Context(), prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID, replyText)
-			} else {
-				postErr = ghClient.CreateComment(r.Context(), prInfo.Owner, prInfo.Repo, prInfo.Number, replyText)
-			}
-			if postErr != nil {
-				log.Printf("failed to create comment: %v", postErr)
-			} else {
-				log.Printf("comment created successfully")
-			}
+
+			postCommentReply(r.Context(), ghClient, c, prInfo, replyText)
 
 			agentReplies = append(agentReplies, agentReply{
 				CommentID: fmt.Sprintf("%d", c.ID),
 				Reply:     replyText,
 			})
-
 		}
 
 		status := "completed"
 		if len(agentReplies) == 0 {
 			status = "no_replies"
 		}
-		encode(w, http.StatusOK, response{SessionID: session.ID, Comments: actionable, AgentReplies: agentReplies, RepoPath: repoPath, Status: status})
+		encode(w, http.StatusOK, response{SessionID: sessionID, Comments: actionable, AgentReplies: agentReplies, RepoPath: repoPath, Status: status})
 	})
+}
+
+func fetchPRDetails(ctx context.Context, ghClient *githubapi.Client, prInfo GitHubPR, cacheBust bool) (PRDetails, error) {
+	cachePath := filepath.Join(".cache", fmt.Sprintf("pr%d.json", prInfo.Number))
+
+	if cacheBust {
+		log.Print("cache bust: fetching real data")
+		data, err := ghClient.GetPRDetails(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number)
+		if err != nil {
+			return PRDetails{}, err
+		}
+		prDetails := parseGraphQLPR(data)
+		os.MkdirAll(filepath.Dir(cachePath), 0755)
+		cacheData, _ := json.MarshalIndent(prDetails, "", "  ")
+		os.WriteFile(cachePath, cacheData, 0644)
+		log.Printf("cache updated: %s", cachePath)
+		return prDetails, nil
+	}
+
+	if data, err := os.ReadFile(cachePath); err == nil {
+		log.Printf("cache hit: %s", cachePath)
+		var prDetails PRDetails
+		json.Unmarshal(data, &prDetails)
+		return prDetails, nil
+	}
+
+	log.Print("cache miss: fetching real data")
+	data, err := ghClient.GetPRDetails(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number)
+	if err != nil {
+		return PRDetails{}, err
+	}
+	return parseGraphQLPR(data), nil
+}
+
+func filterActionableComments(comments []Comment) []Comment {
+	var actionable []Comment
+	for _, c := range comments {
+		if c.Author == "ThomasGormley" && strings.Contains(c.Body, "@ThomasGormley") {
+			actionable = append(actionable, c)
+		}
+	}
+	return actionable
+}
+
+func isAlreadyProcessed(c Comment, userAccount string) bool {
+	for _, r := range c.Reactions {
+		if strings.ToUpper(r.Content) == "EYES" && r.User == userAccount {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureRepo(prInfo GitHubPR, branch string) (string, error) {
+	repoPath := filepath.Join(os.Getenv("HOME"), ".devagent/repos", prInfo.Owner, prInfo.Repo)
+	if _, err := os.Stat(repoPath); err == nil {
+		git.Fetch(repoPath)
+		git.CheckoutIn(branch, repoPath)
+		git.ResetHardIn("origin/"+branch, repoPath)
+		return repoPath, nil
+	}
+	os.MkdirAll(filepath.Dir(repoPath), 0755)
+	cloneURL := fmt.Sprintf("git@github.com:%s/%s.git", prInfo.Owner, prInfo.Repo)
+	git.Clone(cloneURL, branch, repoPath)
+	return repoPath, nil
+}
+
+func createOpencodeSession(ctx context.Context, repoPath string) (*opencode.Client, string, error) {
+	opencodeBaseURL := os.Getenv("OPENCODE_BASE_URL")
+	if opencodeBaseURL == "" {
+		opencodeBaseURL = "http://localhost:3366"
+	}
+	client := opencode.NewClient(option.WithBaseURL(opencodeBaseURL))
+	session, err := client.Session.New(ctx, opencode.SessionNewParams{
+		Directory: opencode.String(repoPath),
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return client, session.ID, nil
+}
+
+func addCommentReaction(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR) {
+	log.Printf("adding eyes reaction to comment %d (diffHunk: %s)", c.ID, c.DiffHunk)
+	if c.DiffHunk != "" {
+		if err := ghClient.CreatePullRequestCommentReaction(ctx, prInfo.Owner, prInfo.Repo, c.ID, "eyes"); err != nil {
+			log.Printf("failed to add PR comment reaction: %v", err)
+		} else {
+			log.Printf("PR comment reaction added successfully")
+		}
+	} else {
+		if err := ghClient.CreateReaction(ctx, prInfo.Owner, prInfo.Repo, c.ID, "eyes"); err != nil {
+			log.Printf("failed to add reaction: %v", err)
+		} else {
+			log.Printf("reaction added successfully")
+		}
+	}
+}
+
+func getPromptFromComment(c Comment) string {
+	return strings.TrimSpace(strings.TrimPrefix(c.Body, "@"+c.Author))
+}
+
+func getAgentReply(ctx context.Context, client *opencode.Client, sessionID string, prompt string, repoPath string) (string, error) {
+	return chat(ctx, client, sessionID, prompt, repoPath, []PromptFile{})
+}
+
+func commitRepoChanges(ctx context.Context, client *opencode.Client, sessionID string, replyText string, repoPath string, branch string) error {
+	cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return err
+	}
+
+	status := strings.TrimSpace(string(out))
+	log.Printf("git status output: %s", status)
+	if len(status) == 0 {
+		return nil
+	}
+
+	log.Printf("branch dirty, pushing changes")
+	summary, err := chat(ctx, client, sessionID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), repoPath, []PromptFile{})
+	if err != nil {
+		summary = "auto"
+	}
+
+	if err := exec.Command("git", "-C", repoPath, "add", ".").Run(); err != nil {
+		log.Printf("failed to add: %v", err)
+		return err
+	}
+	if err := exec.Command("git", "-C", repoPath, "commit", "-m", strings.TrimSpace(summary)).Run(); err != nil {
+		log.Printf("failed to commit: %v", err)
+		return err
+	}
+	if err := exec.Command("git", "-C", repoPath, "push", "-u", "origin", branch).Run(); err != nil {
+		log.Printf("failed to push: %v", err)
+		return err
+	}
+	return nil
+}
+
+func postCommentReply(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR, replyText string) {
+	log.Printf("creating comment to PR %d", prInfo.Number)
+	var err error
+	if c.DiffHunk != "" {
+		log.Printf("creating review reply to comment %d", c.ID)
+		err = ghClient.CreateReviewCommentReply(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID, replyText)
+	} else {
+		err = ghClient.CreateComment(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number, replyText)
+	}
+	if err != nil {
+		log.Printf("failed to create comment: %v", err)
+	} else {
+		log.Printf("comment created successfully")
+	}
 }
 func addRoutes(mux *http.ServeMux, ghClient *githubapi.Client) {
 	mux.Handle("/api/health", handleHealth())
