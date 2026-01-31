@@ -154,7 +154,7 @@ func PullIn(dir string) error {
 
 // Fetch fetches all updates from origin in the given directory
 func Fetch(dir string) error {
-	cmd := exec.Command("git", "fetch", "origin")
+	cmd := exec.Command("git", "fetch", "--prune", "origin")
 	cmd.Dir = dir
 	return cmd.Run()
 }

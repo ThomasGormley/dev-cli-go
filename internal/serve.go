@@ -365,6 +365,46 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 	})
 }
 
+func handlerDebug(ghClient *githubapi.Client) http.Handler {
+	type request struct {
+		URL       string `json:"url"`
+		CacheBust bool   `json:"cacheBust"`
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			encode(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+
+		req, err := decode[request](r)
+		if err != nil {
+			encode(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+
+		if req.URL == "" {
+			encode(w, http.StatusBadRequest, map[string]string{"error": "url is required"})
+			return
+		}
+
+		prInfo, err := parseGitHubPRURL(req.URL)
+		if err != nil {
+			encode(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+
+		log.Printf("Debug: owner=%s repo=%s number=%d", prInfo.Owner, prInfo.Repo, prInfo.Number)
+
+		data, err := ghClient.GetPRDetails(r.Context(), prInfo.Owner, prInfo.Repo, prInfo.Number)
+		if err != nil {
+			encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+
+		encode(w, http.StatusOK, data)
+	})
+}
+
 func fetchPRDetails(ctx context.Context, ghClient *githubapi.Client, prInfo GitHubPR, cacheBust bool) (PRDetails, error) {
 	cachePath := filepath.Join(".cache", fmt.Sprintf("pr%d.json", prInfo.Number))
 
@@ -423,7 +463,14 @@ func ensureRepo(prInfo GitHubPR, branch string) (string, error) {
 	if _, err := os.Stat(repoPath); err == nil {
 		git.Fetch(repoPath)
 		git.CheckoutIn(branch, repoPath)
-		git.ResetHardIn("origin/"+branch, repoPath)
+
+		cmd := exec.Command("git", "rev-parse", "--verify", "origin/"+branch)
+		cmd.Dir = repoPath
+		if err := cmd.Run(); err == nil {
+			git.ResetHardIn("origin/"+branch, repoPath)
+		} else {
+			log.Printf("origin/%s not found, using local branch state", branch)
+		}
 		return repoPath, nil
 	}
 	os.MkdirAll(filepath.Dir(repoPath), 0755)
@@ -564,6 +611,7 @@ func postInlineComment(ctx context.Context, ghClient *githubapi.Client, c Commen
 }
 func addRoutes(mux *http.ServeMux, ghClient *githubapi.Client) {
 	mux.Handle("/api/health", handleHealth())
+	mux.Handle("/api/debug", handlerDebug(ghClient))
 	mux.Handle("/api/agent/dispatch", handlerAgentDispatch(ghClient))
 }
 
