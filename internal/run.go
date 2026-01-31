@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 
@@ -11,7 +12,10 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-// type getEnvFunc func(string) string
+const (
+	defaultPort = "1967"
+	defaultHost = "localhost"
+)
 
 func Run(
 	args []string,
@@ -159,14 +163,25 @@ func Run(
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:  "host",
-						Value: "localhost",
+						Value: defaultHost,
 					},
 					&cli.StringFlag{
 						Name:  "port",
-						Value: "1967",
+						Value: defaultPort,
 					},
 				},
 				Action: handleServe(),
+			},
+			{
+				Name:  "agent",
+				Usage: "dev agent things",
+				Subcommands: []*cli.Command{
+					{
+						Name:   "dispatch",
+						Action: handleAgentDispatch(http.DefaultClient),
+						Args:   true,
+					},
+				},
 			},
 		},
 	}

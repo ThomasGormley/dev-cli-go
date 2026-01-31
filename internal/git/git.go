@@ -133,9 +133,47 @@ func Checkout(branch string) error {
 	return exec.Command("git", "checkout", branch).Run()
 }
 
+// CheckoutIn switches to the specified branch in the given directory
+func CheckoutIn(branch, dir string) error {
+	cmd := exec.Command("git", "checkout", branch)
+	cmd.Dir = dir
+	return cmd.Run()
+}
+
 // Pull fetches and merges changes from the remote
 func Pull() error {
 	return exec.Command("git", "pull").Run()
+}
+
+// PullIn fetches and merges changes from the remote in the given directory
+func PullIn(dir string) error {
+	cmd := exec.Command("git", "pull")
+	cmd.Dir = dir
+	return cmd.Run()
+}
+
+// Fetch fetches all updates from origin in the given directory
+func Fetch(dir string) error {
+	cmd := exec.Command("git", "fetch", "origin")
+	cmd.Dir = dir
+	return cmd.Run()
+}
+
+// Clone clones a repository from URL to destination with specified branch
+func Clone(url, branch, dest string) error {
+	return exec.Command("git", "clone", "--depth=1", "--branch="+branch, url, dest).Run()
+}
+
+// ResetHard resets the current HEAD to the specified ref
+func ResetHard(ref string) error {
+	return exec.Command("git", "reset", "--hard", ref).Run()
+}
+
+// ResetHardIn resets the current HEAD to the specified ref in the given directory
+func ResetHardIn(ref, dir string) error {
+	cmd := exec.Command("git", "reset", "--hard", ref)
+	cmd.Dir = dir
+	return cmd.Run()
 }
 
 func PullRebase() error {

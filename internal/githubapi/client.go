@@ -109,19 +109,27 @@ func (c *Client) SearchMentions(ctx context.Context, username string, since time
 	return result.Issues, nil
 }
 
-func (c *Client) GetIssueDetails(ctx context.Context, owner, repo string, number int) (*github.Issue, []*github.IssueComment, error) {
-	issue, _, err := c.client.Issues.Get(ctx, owner, repo, number)
+func (c *Client) GetPullRequestDetails(ctx context.Context, owner, repo string, number int) (*github.PullRequest, []*github.IssueComment, []*github.PullRequestComment, error) {
+	pr, _, err := c.client.PullRequests.Get(ctx, owner, repo, number)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	opts := &github.IssueListCommentsOptions{
 		ListOptions: github.ListOptions{PerPage: 100},
 	}
-	comments, _, err := c.client.Issues.ListComments(ctx, owner, repo, number, opts)
+	issueComments, _, err := c.client.Issues.ListComments(ctx, owner, repo, number, opts)
 	if err != nil {
-		return issue, nil, err
+		return pr, nil, nil, err
 	}
 
-	return issue, comments, nil
+	prOpts := &github.PullRequestListCommentsOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+	reviewComments, _, err := c.client.PullRequests.ListComments(ctx, owner, repo, number, prOpts)
+	if err != nil {
+		return pr, issueComments, nil, err
+	}
+
+	return pr, issueComments, reviewComments, nil
 }
