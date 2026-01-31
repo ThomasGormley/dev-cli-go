@@ -14,14 +14,12 @@ import (
 type Client struct {
 	client       *github.Client
 	lastModified string
-	pollInterval time.Duration
 	mu           sync.RWMutex
 }
 
 type NotificationsResult struct {
 	Notifications []*github.Notification
 	Modified      bool
-	PollInterval  time.Duration
 }
 
 func NewClient(token string) *Client {
@@ -31,8 +29,7 @@ func NewClient(token string) *Client {
 	)
 	tc := oauth2.NewClient(ctx, ts)
 	return &Client{
-		client:       github.NewClient(tc),
-		pollInterval: time.Minute,
+		client: github.NewClient(tc),
 	}
 }
 
@@ -62,7 +59,6 @@ func (c *Client) ListNotifications(ctx context.Context) (*NotificationsResult, e
 			return &NotificationsResult{
 				Notifications: nil,
 				Modified:      false,
-				PollInterval:  c.getPollInterval(resp),
 			}, nil
 		}
 		return nil, err
@@ -72,29 +68,12 @@ func (c *Client) ListNotifications(ctx context.Context) (*NotificationsResult, e
 	if lm := resp.Header.Get("Last-Modified"); lm != "" {
 		c.lastModified = lm
 	}
-	c.pollInterval = c.getPollInterval(resp)
 	c.mu.Unlock()
 
 	return &NotificationsResult{
 		Notifications: notifications,
 		Modified:      true,
-		PollInterval:  c.getPollInterval(resp),
 	}, nil
-}
-
-func (c *Client) getPollInterval(resp *github.Response) time.Duration {
-	if pi := resp.Header.Get("X-Poll-Interval"); pi != "" {
-		if seconds, err := time.ParseDuration(pi + "s"); err == nil {
-			return seconds
-		}
-	}
-	return time.Minute
-}
-
-func (c *Client) PollInterval() time.Duration {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.pollInterval
 }
 
 func (c *Client) SearchMentions(ctx context.Context, username string, since time.Time) ([]*github.Issue, error) {
