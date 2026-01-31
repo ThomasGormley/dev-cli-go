@@ -208,7 +208,7 @@ type PromptFile struct {
 	End         int    `json:"end"`
 }
 
-func extractTextFromResponse(rsp *opencode.SessionPromptResponse) string {
+func textFromRsp(rsp *opencode.SessionPromptResponse) string {
 	var textParts []string
 	for _, part := range rsp.Parts {
 		if part.Type == opencode.PartTypeText && part.Text != "" {
@@ -218,7 +218,7 @@ func extractTextFromResponse(rsp *opencode.SessionPromptResponse) string {
 	return strings.Join(textParts, "\n")
 }
 
-func chat(ctx context.Context, client *opencode.Client, sessionID string, text string, directory string, files []PromptFile) (string, error) {
+func chat(ctx context.Context, client *opencode.Client, sessionID string, text string, directory string) (string, error) {
 	log.Printf("Sending message to opencode...")
 
 	var parts []opencode.SessionPromptParamsPartUnion
@@ -226,25 +226,6 @@ func chat(ctx context.Context, client *opencode.Client, sessionID string, text s
 		Type: opencode.F(opencode.TextPartInputType("text")),
 		Text: opencode.String(text),
 	})
-
-	for _, f := range files {
-		textParam := opencode.FilePartSourceParam{
-			Type: opencode.F(opencode.FilePartSourceType("file")),
-			Text: opencode.F(opencode.FilePartSourceTextParam{
-				Start: opencode.Int(int64(f.Start)),
-				End:   opencode.Int(int64(f.End)),
-				Value: opencode.String(f.Replacement),
-			}),
-			Path: opencode.String(f.Filename),
-		}
-		parts = append(parts, opencode.FilePartInputParam{
-			Type:     opencode.F(opencode.FilePartInputType("file")),
-			Mime:     opencode.String(f.Mime),
-			URL:      opencode.String(fmt.Sprintf("data:%s;base64,%s", f.Mime, f.Content)),
-			Filename: opencode.String(f.Filename),
-			Source:   opencode.Raw[opencode.FilePartSourceUnionParam](textParam),
-		})
-	}
 
 	rsp, err := client.Session.Prompt(
 		ctx,
@@ -263,7 +244,7 @@ func chat(ctx context.Context, client *opencode.Client, sessionID string, text s
 		return "", fmt.Errorf("failed to send prompt: %w", err)
 	}
 
-	replyText := extractTextFromResponse(rsp)
+	replyText := textFromRsp(rsp)
 	if replyText == "" {
 		return "", fmt.Errorf("failed to parse the text response")
 	}
@@ -350,15 +331,15 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 
 		var agentReplies []agentReply
 		for _, c := range actionable {
-			if isAlreadyProcessed(c, "ThomasGormley") {
+			if isProcessed(c, "ThomasGormley") {
 				log.Printf("comment %d already processed, skipping", c.ID)
 				continue
 			}
 
-			addCommentReaction(r.Context(), ghClient, c, prInfo)
+			reactToComment(r.Context(), ghClient, c, prInfo)
 
-			promptText := getPromptFromComment(c)
-			replyText, err := getAgentReply(r.Context(), opencodeClient, sessionID, promptText, repoPath)
+			promptText := getPromptFromComment(c, prDetails)
+			replyText, err := chat(r.Context(), opencodeClient, sessionID, promptText, repoPath)
 			if err != nil {
 				log.Printf("failed to send prompt: %v", err)
 				continue
@@ -368,7 +349,7 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 				log.Printf("failed to commit repo changes")
 			}
 
-			postCommentReply(r.Context(), ghClient, c, prInfo, replyText)
+			postInlineComment(r.Context(), ghClient, c, prInfo, replyText)
 
 			agentReplies = append(agentReplies, agentReply{
 				CommentID: fmt.Sprintf("%d", c.ID),
@@ -428,7 +409,7 @@ func filterActionableComments(comments []Comment) []Comment {
 	return actionable
 }
 
-func isAlreadyProcessed(c Comment, userAccount string) bool {
+func isProcessed(c Comment, userAccount string) bool {
 	for _, r := range c.Reactions {
 		if strings.ToUpper(r.Content) == "EYES" && r.User == userAccount {
 			return true
@@ -466,7 +447,7 @@ func createOpencodeSession(ctx context.Context, repoPath string) (*opencode.Clie
 	return client, session.ID, nil
 }
 
-func addCommentReaction(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR) {
+func reactToComment(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR) {
 	isReviewComment := c.FilePath != ""
 	log.Printf("adding eyes reaction to comment %d (review: %v)", c.ID, isReviewComment)
 	if isReviewComment {
@@ -484,12 +465,51 @@ func addCommentReaction(ctx context.Context, ghClient *githubapi.Client, c Comme
 	}
 }
 
-func getPromptFromComment(c Comment) string {
-	return strings.TrimSpace(strings.TrimPrefix(c.Body, "@"+c.Author))
+func getPromptFromComment(c Comment, prDetails PRDetails) string {
+	body := strings.TrimSpace(strings.TrimPrefix(c.Body, "@"+c.Author))
+
+	prContext := getPRContext(prDetails, c.ID)
+
+	isReviewComment := c.FilePath != ""
+
+	if isReviewComment {
+		var commentContext string
+		if c.DiffHunk != "" {
+			commentContext = fmt.Sprintf("You are reviewing a comment on file \"%s\" at line %d.\n\nDiff context:\n%s", c.FilePath, c.Line, c.DiffHunk)
+		} else {
+			commentContext = fmt.Sprintf("You are reviewing a comment on file \"%s\" at line %d.", c.FilePath, c.Line)
+		}
+
+		return fmt.Sprintf("%s\n\n%s\n\n%s", body, prContext, commentContext)
+	}
+
+	return fmt.Sprintf("%s\n\n%s", body, prContext)
 }
 
-func getAgentReply(ctx context.Context, client *opencode.Client, sessionID string, prompt string, repoPath string) (string, error) {
-	return chat(ctx, client, sessionID, prompt, repoPath, []PromptFile{})
+func getPRContext(prDetails PRDetails, currentCommentID int64) string {
+	var parts []string
+
+	parts = append(parts, "== Previous discussion context ==")
+
+	var prevComments []string
+	for _, cm := range prDetails.Comments {
+		if cm.ID == currentCommentID {
+			continue
+		}
+		var location string
+		if cm.FilePath != "" {
+			location = fmt.Sprintf(" (%s:%d)", cm.FilePath, cm.Line)
+		}
+		prevComments = append(prevComments, fmt.Sprintf("- %s at %s%s: %s", cm.Author, cm.CreatedAt, location, cm.Body))
+	}
+
+	if len(prevComments) > 0 {
+		parts = append(parts, "<previous_comments>")
+		parts = append(parts, prevComments...)
+		parts = append(parts, "</previous_comments>")
+	}
+
+	return strings.Join(parts, "\n")
 }
 
 func commitRepoChanges(ctx context.Context, client *opencode.Client, sessionID string, replyText string, repoPath string, branch string) error {
@@ -506,7 +526,7 @@ func commitRepoChanges(ctx context.Context, client *opencode.Client, sessionID s
 	}
 
 	log.Printf("branch dirty, pushing changes")
-	summary, err := chat(ctx, client, sessionID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), repoPath, []PromptFile{})
+	summary, err := chat(ctx, client, sessionID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), repoPath)
 	if err != nil {
 		summary = "auto"
 	}
@@ -526,7 +546,7 @@ func commitRepoChanges(ctx context.Context, client *opencode.Client, sessionID s
 	return nil
 }
 
-func postCommentReply(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR, replyText string) {
+func postInlineComment(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR, replyText string) {
 	log.Printf("creating comment to PR %d", prInfo.Number)
 	var err error
 	isReviewComment := c.FilePath != ""

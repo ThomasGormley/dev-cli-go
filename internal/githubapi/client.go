@@ -128,14 +128,20 @@ type GraphQLComment struct {
 	Author     struct {
 		Login string `json:"login"`
 	} `json:"author"`
-	CreatedAt    string `json:"createdAt"`
-	IsReview     bool   `json:"-"`
-	DiffHunk     string `json:"-"`
-	Path         string `json:"path"`
-	Line         int    `json:"line"`
-	StartLine    int    `json:"startLine"`
-	OriginalLine int    `json:"originalLine"`
-	Reactions    struct {
+	CreatedAt        string `json:"createdAt"`
+	Path             string `json:"path"`
+	Line             int    `json:"line"`
+	StartLine        int    `json:"startLine"`
+	OriginalLine     int    `json:"originalLine"`
+	OriginalPosition int    `json:"originalPosition"`
+	DiffHunk         string `json:"diffHunk"`
+	Commit           struct {
+		OID string `json:"oid"`
+	} `json:"commit"`
+	OriginalCommit struct {
+		OID string `json:"oid"`
+	} `json:"originalCommit"`
+	Reactions struct {
 		Nodes []struct {
 			Content string `json:"content"`
 			User    struct {
@@ -202,6 +208,10 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 								line
 								startLine
 								originalLine
+								originalPosition
+								diffHunk
+								commit { oid }
+								originalCommit { oid }
 								author { login }
 								createdAt
 								reactions(first: 10) {
