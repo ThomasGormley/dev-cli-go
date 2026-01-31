@@ -14,12 +14,14 @@ import (
 type Client struct {
 	client       *github.Client
 	lastModified string
+	pollInterval time.Duration // Critical for future polling-based notification workflows
 	mu           sync.RWMutex
 }
 
 type NotificationsResult struct {
 	Notifications []*github.Notification
 	Modified      bool
+	PollInterval  time.Duration // Critical for future work - indicates when to poll next
 }
 
 func NewClient(token string) *Client {
@@ -41,6 +43,7 @@ func (c *Client) ListNotifications(ctx context.Context) (*NotificationsResult, e
 
 	c.mu.RLock()
 	lastMod := c.lastModified
+	pollInterval := c.pollInterval
 	c.mu.RUnlock()
 
 	req, err := c.client.NewRequest("GET", "notifications", opts)
@@ -59,6 +62,7 @@ func (c *Client) ListNotifications(ctx context.Context) (*NotificationsResult, e
 			return &NotificationsResult{
 				Notifications: nil,
 				Modified:      false,
+				PollInterval:  pollInterval,
 			}, nil
 		}
 		return nil, err
@@ -68,12 +72,35 @@ func (c *Client) ListNotifications(ctx context.Context) (*NotificationsResult, e
 	if lm := resp.Header.Get("Last-Modified"); lm != "" {
 		c.lastModified = lm
 	}
+	// Critical for future work: persist poll interval for smart notification polling
+	c.pollInterval = getPollInterval(resp)
 	c.mu.Unlock()
 
 	return &NotificationsResult{
 		Notifications: notifications,
 		Modified:      true,
+		PollInterval:  pollInterval,
 	}, nil
+}
+
+// getPollInterval extracts recommended poll interval from response headers.
+// Critical for future work: enables smart, rate-limit-aware polling behavior.
+func getPollInterval(resp *github.Response) time.Duration {
+	if resp == nil || resp.Response == nil {
+		return 60 * time.Second
+	}
+	if s := resp.Header.Get("X-Poll-Interval"); s != "" {
+		if d, err := time.ParseDuration(s + "s"); err == nil {
+			return d
+		}
+	}
+	return 60 * time.Second
+}
+
+func (c *Client) PollInterval() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.pollInterval
 }
 
 func (c *Client) SearchMentions(ctx context.Context, username string, since time.Time) ([]*github.Issue, error) {
