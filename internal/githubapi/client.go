@@ -77,8 +77,15 @@ type GraphQLPRResponse struct {
 	Repository struct {
 		PullRequest struct {
 			Title       string `json:"title"`
+			Body        string `json:"body"`
 			HeadRefName string `json:"headRefName"`
-			Author      struct {
+			BaseRefName string `json:"baseRefName"`
+			Additions   int    `json:"additions"`
+			Deletions   int    `json:"deletions"`
+			Commits     struct {
+				TotalCount int `json:"totalCount"`
+			} `json:"commits"`
+			Author struct {
 				Login string `json:"login"`
 			} `json:"author"`
 			Comments struct {
@@ -89,11 +96,20 @@ type GraphQLPRResponse struct {
 					Author struct {
 						Login string `json:"login"`
 					} `json:"author"`
+					Body     string `json:"body"`
 					Comments struct {
 						Nodes []GraphQLComment `json:"nodes"`
 					} `json:"comments"`
 				} `json:"nodes"`
 			} `json:"reviews"`
+			Files struct {
+				Nodes []struct {
+					Path       string `json:"path"`
+					ChangeType string `json:"changeType"`
+					Additions  int    `json:"additions"`
+					Deletions  int    `json:"deletions"`
+				} `json:"nodes"`
+			} `json:"files"`
 		} `json:"pullRequest"`
 	} `json:"repository"`
 }
@@ -103,7 +119,14 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 		repository(owner: $owner, name: $repo) {
 			pullRequest(number: $number) {
 				title
+				body
 				headRefName
+				baseRefName
+				additions
+				deletions
+				commits(first: 1) {
+					totalCount
+				}
 				author { login }
 				comments(first: 10) {
 					nodes {
@@ -122,6 +145,7 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 				reviews(first: 10) {
 					nodes {
 						author { login }
+						body
 						comments(first: 10) {
 							nodes {
 								databaseId
@@ -144,6 +168,14 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 								}
 							}
 						}
+					}
+				}
+				files(first: 100) {
+					nodes {
+						path
+						changeType
+						additions
+						deletions
 					}
 				}
 			}

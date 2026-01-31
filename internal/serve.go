@@ -46,15 +46,27 @@ type Comment struct {
 type PRDetails struct {
 	Number     int       `json:"number"`
 	Title      string    `json:"title"`
+	Body       string    `json:"body"`
 	BaseBranch string    `json:"baseBranch"`
 	HeadBranch string    `json:"headBranch"`
 	Author     string    `json:"author"`
 	State      string    `json:"state"`
 	IsDraft    bool      `json:"isDraft"`
+	Additions  int       `json:"additions"`
+	Deletions  int       `json:"deletions"`
+	Commits    int       `json:"commits"`
 	CreatedAt  string    `json:"createdAt"`
 	UpdatedAt  string    `json:"updatedAt"`
 	URL        string    `json:"url"`
 	Comments   []Comment `json:"comments"`
+	Files      []PRFile  `json:"files"`
+}
+
+type PRFile struct {
+	Path       string `json:"path"`
+	ChangeType string `json:"changeType"`
+	Additions  int    `json:"additions"`
+	Deletions  int    `json:"deletions"`
 }
 
 func parseGitHubPRURL(url string) (GitHubPR, error) {
@@ -104,11 +116,26 @@ func parseGraphQLPR(data *githubapi.GraphQLPRResponse) PRDetails {
 			})
 		}
 	}
+	var files []PRFile
+	for _, f := range data.Repository.PullRequest.Files.Nodes {
+		files = append(files, PRFile{
+			Path:       f.Path,
+			ChangeType: f.ChangeType,
+			Additions:  f.Additions,
+			Deletions:  f.Deletions,
+		})
+	}
 	return PRDetails{
 		Title:      data.Repository.PullRequest.Title,
+		Body:       data.Repository.PullRequest.Body,
 		HeadBranch: data.Repository.PullRequest.HeadRefName,
+		BaseBranch: data.Repository.PullRequest.BaseRefName,
 		Author:     data.Repository.PullRequest.Author.Login,
+		Additions:  data.Repository.PullRequest.Additions,
+		Deletions:  data.Repository.PullRequest.Deletions,
+		Commits:    data.Repository.PullRequest.Commits.TotalCount,
 		Comments:   comments,
+		Files:      files,
 	}
 }
 
@@ -299,7 +326,7 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 			return
 		}
 
-		if prDetails.Author != os.Getenv("DEV_AGENT_USERNAME") {
+		if prDetails.Author != os.Getenv("DEV_GITHUB_USER") {
 			encode(w, http.StatusForbidden, map[string]string{"error": "PR author is not authorized"})
 			return
 		}
@@ -331,14 +358,14 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 
 		var agentReplies []agentReply
 		for _, c := range actionable {
-			if isProcessed(c, os.Getenv("DEV_AGENT_USERNAME")) {
+			if isProcessed(c, os.Getenv("DEV_GITHUB_USER")) {
 				log.Printf("comment %d already processed, skipping", c.ID)
 				continue
 			}
 
 			reactToComment(r.Context(), ghClient, c, prInfo)
 
-			promptText := getPromptFromComment(c, prDetails)
+			promptText := prompt(c, prDetails)
 			replyText, err := chat(r.Context(), opencodeClient, sessionID, promptText, repoPath)
 			if err != nil {
 				log.Printf("failed to send prompt: %v", err)
@@ -442,7 +469,7 @@ func fetchPRDetails(ctx context.Context, ghClient *githubapi.Client, prInfo GitH
 func filterActionableComments(comments []Comment) []Comment {
 	var actionable []Comment
 	for _, c := range comments {
-		if c.Author == os.Getenv("DEV_AGENT_USERNAME") && strings.Contains(c.Body, "@"+os.Getenv("DEV_AGENT_USERNAME")) {
+		if c.Author == os.Getenv("DEV_GITHUB_USER") && strings.Contains(c.Body, "@"+os.Getenv("DEV_GITHUB_USER")) {
 			actionable = append(actionable, c)
 		}
 	}
@@ -512,10 +539,11 @@ func reactToComment(ctx context.Context, ghClient *githubapi.Client, c Comment, 
 	}
 }
 
-func getPromptFromComment(c Comment, prDetails PRDetails) string {
+func prompt(c Comment, prDetails PRDetails) string {
 	body := strings.TrimSpace(strings.TrimPrefix(c.Body, "@"+c.Author))
 
-	prContext := getPRContext(prDetails, c.ID)
+	prContext := prContext(prDetails, c.ID)
+	prFiles := prFiles(prDetails)
 
 	isReviewComment := c.FilePath != ""
 
@@ -530,10 +558,22 @@ func getPromptFromComment(c Comment, prDetails PRDetails) string {
 		return fmt.Sprintf("%s\n\n%s\n\n%s", body, prContext, commentContext)
 	}
 
-	return fmt.Sprintf("%s\n\n%s", body, prContext)
+	return fmt.Sprintf("%s\n\n%s\n\n%s", body, prContext, prFiles)
 }
 
-func getPRContext(prDetails PRDetails, currentCommentID int64) string {
+func prFiles(prDetails PRDetails) string {
+	if len(prDetails.Files) == 0 {
+		return ""
+	}
+	var parts []string
+	parts = append(parts, "== Changed Files ==")
+	for _, f := range prDetails.Files {
+		parts = append(parts, fmt.Sprintf("- %s (%s) +%d/-%d", f.Path, f.ChangeType, f.Additions, f.Deletions))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func prContext(prDetails PRDetails, currentCommentID int64) string {
 	var parts []string
 
 	parts = append(parts, "== Previous discussion context ==")
@@ -579,16 +619,13 @@ func commitRepoChanges(ctx context.Context, client *opencode.Client, sessionID s
 	}
 
 	if err := exec.Command("git", "-C", repoPath, "add", ".").Run(); err != nil {
-		log.Printf("failed to add: %v", err)
-		return err
+		return fmt.Errorf("git add: %w", err)
 	}
 	if err := exec.Command("git", "-C", repoPath, "commit", "-m", strings.TrimSpace(summary)).Run(); err != nil {
-		log.Printf("failed to commit: %v", err)
-		return err
+		return fmt.Errorf("git commit: %w", err)
 	}
 	if err := exec.Command("git", "-C", repoPath, "push", "-u", "origin", branch).Run(); err != nil {
-		log.Printf("failed to push: %v", err)
-		return err
+		return fmt.Errorf("git push: %w", err)
 	}
 	return nil
 }
