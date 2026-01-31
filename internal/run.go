@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"context"
 	"io"
+	"log"
+	"os"
+	"os/signal"
 
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/urfave/cli/v2"
@@ -16,6 +20,19 @@ func Run(
 	ghClient gh.GitHubClienter,
 	exitErrorHandler cli.ExitErrHandlerFunc,
 ) error {
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, os.Interrupt)
+	go func() {
+		select {
+		case <-sigc:
+			log.Print("Cleaning up. Press Ctrl-C again to exit immediately.")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	app := &cli.App{
 		Name:                 "dev",
@@ -136,8 +153,23 @@ func Run(
 				},
 				Action: handleTest(stdout, stderr),
 			},
+			{
+				Name:  "serve",
+				Usage: "dev server",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "host",
+						Value: "localhost",
+					},
+					&cli.StringFlag{
+						Name:  "port",
+						Value: "1967",
+					},
+				},
+				Action: handleServe(),
+			},
 		},
 	}
 
-	return app.Run(args)
+	return app.RunContext(ctx, args)
 }

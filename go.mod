@@ -1,10 +1,15 @@
 module github.com/thomasgormley/dev-cli-go
 
-go 1.23.0
-
-require github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466
+go 1.24.0
 
 require (
+	github.com/google/go-github/v69 v69.2.0
+	github.com/shurcooL/graphql v0.0.0-20230722043721-ed46e5a46466
+	golang.org/x/oauth2 v0.34.0
+)
+
+require (
+	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
