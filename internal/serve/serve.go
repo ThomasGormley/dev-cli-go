@@ -441,7 +441,7 @@ func chat(ctx context.Context, client *opencode.Client, sessionID string, text s
 				ProviderID: opencode.String(provider),
 				ModelID:    opencode.String(model),
 			}),
-			System: opencode.String("You are helping with a GitHub pull request. Follow instructions carefully.\n\nYou have access to Linear via 'dev linear' command:\n- dev linear create --title \"...\" --description \"...\"\n- dev linear get <issue-id>\n- dev linear update <issue-id> --title \"...\" --description \"...\"\n\nOutput is JSON by default."),
+			System: opencode.String("You are helping with a GitHub pull request. Follow instructions carefully.\n\nYou have bash access. When I ask you to create Linear tickets or perform actions, EXECUTE the commands directly using bash.\n\nLinear commands:\n- dev linear create --title \"...\" --description \"$(cat <<'EOF'\nmulti-line\ncontent\nEOF\n)\"\n- dev linear get <issue-id>\n- dev linear update <issue-id> --title \"...\" --description \"$(cat <<'EOF'\ncontent\nEOF\n)\"\n\nAll dev linear commands return JSON with `id` and `url` fields. IMPORTANT: After executing a command, PARSE the JSON output and INCLUDE the URL in your reply.\n\nExample:\nUser: Create a ticket for X\nYou: [execute command, parse JSON]\nTicket created: THO-123\nhttps://linear.app/issue/THO-123\n\nUse $(cat <<'EOF'...EOF) for multi-line descriptions."),
 			Parts:  opencode.F(parts),
 		},
 	)
