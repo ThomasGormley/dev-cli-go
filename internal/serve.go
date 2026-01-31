@@ -299,7 +299,7 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 			return
 		}
 
-		if prDetails.Author != "ThomasGormley" {
+		if prDetails.Author != os.Getenv("DEV_AGENT_USERNAME") {
 			encode(w, http.StatusForbidden, map[string]string{"error": "PR author is not authorized"})
 			return
 		}
@@ -331,7 +331,7 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 
 		var agentReplies []agentReply
 		for _, c := range actionable {
-			if isProcessed(c, "ThomasGormley") {
+			if isProcessed(c, os.Getenv("DEV_AGENT_USERNAME")) {
 				log.Printf("comment %d already processed, skipping", c.ID)
 				continue
 			}
@@ -442,7 +442,7 @@ func fetchPRDetails(ctx context.Context, ghClient *githubapi.Client, prInfo GitH
 func filterActionableComments(comments []Comment) []Comment {
 	var actionable []Comment
 	for _, c := range comments {
-		if c.Author == "ThomasGormley" && strings.Contains(c.Body, "@ThomasGormley") {
+		if c.Author == os.Getenv("DEV_AGENT_USERNAME") && strings.Contains(c.Body, "@"+os.Getenv("DEV_AGENT_USERNAME")) {
 			actionable = append(actionable, c)
 		}
 	}
