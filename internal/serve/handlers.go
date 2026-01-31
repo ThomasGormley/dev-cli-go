@@ -25,7 +25,7 @@ func handleHealth() http.Handler {
 	})
 }
 
-func handlerAgentDispatch(ghClient *githubapi.Client, user string) http.Handler {
+func handlerAgentDispatch(ghClient *githubapi.Client, user string, provider string, model string) http.Handler {
 	type agentReply struct {
 		CommentID string `json:"commentId"`
 		Reply     string `json:"reply"`
@@ -113,13 +113,13 @@ func handlerAgentDispatch(ghClient *githubapi.Client, user string) http.Handler 
 			}
 
 			promptText := prompt(c, prDetails)
-			replyText, err := chat(r.Context(), opencodeClient, sessionID, promptText, repo.Path())
+			replyText, err := chat(r.Context(), opencodeClient, sessionID, promptText, repo.Path(), provider, model)
 			if err != nil {
 				log.Printf("comment %d: chat failed: %v", c.ID, err)
 				continue
 			}
 
-			commitMsg, err := chat(r.Context(), opencodeClient, sessionID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), repo.Path())
+			commitMsg, err := chat(r.Context(), opencodeClient, sessionID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), repo.Path(), provider, model)
 			if err != nil {
 				commitMsg = "auto"
 			}

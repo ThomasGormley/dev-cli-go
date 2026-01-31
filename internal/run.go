@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -9,8 +11,95 @@ import (
 	"os/signal"
 
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
+	"github.com/thomasgormley/dev-cli-go/internal/linear"
 	"github.com/urfave/cli/v2"
 )
+
+func getLinearClient() linear.Client {
+	token := os.Getenv("LINEAR_API_KEY")
+	return linear.NewClient(token)
+}
+
+func handleLinearCreate(stdout, stderr io.Writer) cli.ActionFunc {
+	return func(c *cli.Context) error {
+		title := c.String("title")
+		description := c.String("description")
+		teamID := os.Getenv("LINEAR_TEAM_ID")
+
+		if teamID == "" {
+			cli.Exit("LINEAR_TEAM_ID env var required", 1)
+		}
+
+		client := getLinearClient()
+		issue, err := client.CreateIssue(c.Context, title, description, teamID)
+		if err != nil {
+			cli.Exit(fmt.Sprintf("failed to create issue: %v", err), 1)
+		}
+
+		output := map[string]string{
+			"id":  string(issue.Identifier),
+			"url": fmt.Sprintf("https://linear.app/issue/%s", string(issue.Identifier)),
+		}
+		data, _ := json.Marshal(output)
+		fmt.Fprintln(stdout, string(data))
+		return nil
+	}
+}
+
+func handleLinearGet(stdout, stderr io.Writer) cli.ActionFunc {
+	return func(c *cli.Context) error {
+		if c.Args().Len() != 1 {
+			cli.Exit("issue ID required", 1)
+		}
+
+		issueID := c.Args().First()
+		client := getLinearClient()
+		issue, err := client.GetIssue(c.Context, issueID)
+		if err != nil {
+			cli.Exit(fmt.Sprintf("failed to get issue: %v", err), 1)
+		}
+
+		output := map[string]string{
+			"id":         string(issue.Identifier),
+			"identifier": string(issue.Identifier),
+			"title":      string(issue.Title),
+		}
+		data, _ := json.Marshal(output)
+		fmt.Fprintln(stdout, string(data))
+		return nil
+	}
+}
+
+func handleLinearUpdate(stdout, stderr io.Writer) cli.ActionFunc {
+	return func(c *cli.Context) error {
+		if c.Args().Len() != 1 {
+			cli.Exit("issue ID required", 1)
+		}
+
+		issueID := c.Args().First()
+		title := c.String("title")
+		description := c.String("description")
+
+		if title == "" && description == "" {
+			cli.Exit("at least --title or --description required", 1)
+		}
+
+		client := getLinearClient()
+		issue, err := client.UpdateIssue(c.Context, issueID, title, description)
+		if err != nil {
+			cli.Exit(fmt.Sprintf("failed to update issue: %v", err), 1)
+		}
+
+		output := map[string]string{
+			"id":         string(issue.Identifier),
+			"identifier": string(issue.Identifier),
+			"title":      string(issue.Title),
+		}
+		data, _ := json.Marshal(output)
+		fmt.Fprintln(stdout, string(data))
+		return nil
+	}
+}
 
 const (
 	defaultPort = "1967"
@@ -170,6 +259,18 @@ func Run(
 						Name:  "port",
 						Value: defaultPort,
 					},
+					&cli.StringFlag{
+						Name:     "provider",
+						Usage:    "opencode provider ID",
+						EnvVars:  []string{"DEV_AGENT_PROVIDER"},
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "model",
+						Usage:    "opencode model ID",
+						EnvVars:  []string{"DEV_AGENT_MODEL"},
+						Required: true,
+					},
 				},
 				Action: handleServe(),
 			},
@@ -181,6 +282,50 @@ func Run(
 						Name:   "dispatch",
 						Action: handleAgentDispatch(http.DefaultClient),
 						Args:   true,
+					},
+				},
+			},
+			{
+				Name:  "linear",
+				Usage: "Linear issue management",
+				Subcommands: []*cli.Command{
+					{
+						Name:  "create",
+						Usage: "Create a new Linear issue",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "title",
+								Usage:    "title of the issue",
+								Required: true,
+							},
+							&cli.StringFlag{
+								Name:  "description",
+								Usage: "description of the issue",
+							},
+						},
+						Action: handleLinearCreate(stdout, stderr),
+					},
+					{
+						Name:      "get",
+						Usage:     "Get an issue by ID",
+						ArgsUsage: "<issue-id>",
+						Action:    handleLinearGet(stdout, stderr),
+					},
+					{
+						Name:      "update",
+						Usage:     "Update an issue",
+						ArgsUsage: "<issue-id>",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:  "title",
+								Usage: "title of the issue",
+							},
+							&cli.StringFlag{
+								Name:  "description",
+								Usage: "description of the issue",
+							},
+						},
+						Action: handleLinearUpdate(stdout, stderr),
 					},
 				},
 			},

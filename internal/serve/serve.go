@@ -20,16 +20,18 @@ import (
 )
 
 type HandleOpts struct {
-	GitHubUser     string
-	GitHubClient   *githubapi.Client
-	AllowedOrigins []string
+	GitHubUser       string
+	GitHubClient     *githubapi.Client
+	AllowedOrigins   []string
+	OpenCodeProvider string
+	OpenCodeModel    string
 }
 
 func Handle(opt HandleOpts) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/health", handleHealth())
 	mux.Handle("/api/debug", handlerDebug(opt.GitHubClient))
-	mux.Handle("/api/agent/dispatch", handlerAgentDispatch(opt.GitHubClient, opt.GitHubUser))
+	mux.Handle("/api/agent/dispatch", handlerAgentDispatch(opt.GitHubClient, opt.GitHubUser, opt.OpenCodeProvider, opt.OpenCodeModel))
 
 	var handler http.Handler = mux
 	handler = corsMiddleware(handler, opt.AllowedOrigins)
@@ -421,7 +423,7 @@ func textFromRsp(rsp *opencode.SessionPromptResponse) string {
 	return strings.Join(textParts, "\n")
 }
 
-func chat(ctx context.Context, client *opencode.Client, sessionID string, text string, directory string) (string, error) {
+func chat(ctx context.Context, client *opencode.Client, sessionID string, text string, directory string, provider string, model string) (string, error) {
 	log.Printf("Sending message to opencode...")
 
 	var parts []opencode.SessionPromptParamsPartUnion
@@ -436,10 +438,10 @@ func chat(ctx context.Context, client *opencode.Client, sessionID string, text s
 		opencode.SessionPromptParams{
 			Directory: opencode.String(directory),
 			Model: opencode.F(opencode.SessionPromptParamsModel{
-				ProviderID: opencode.String("opencode"),
-				ModelID:    opencode.String("minimax-m2.1-free"),
+				ProviderID: opencode.String(provider),
+				ModelID:    opencode.String(model),
 			}),
-			System: opencode.String("You are helping with a GitHub pull request. Follow instructions carefully."),
+			System: opencode.String("You are helping with a GitHub pull request. Follow instructions carefully.\n\nYou have access to Linear via 'dev linear' command:\n- dev linear create --title \"...\" --description \"...\"\n- dev linear get <issue-id>\n- dev linear update <issue-id> --title \"...\" --description \"...\"\n\nOutput is JSON by default."),
 			Parts:  opencode.F(parts),
 		},
 	)

@@ -19,6 +19,8 @@ func handleServe() cli.ActionFunc {
 
 	return func(c *cli.Context) error {
 		var host, port = c.String("host"), c.String("port")
+		provider := c.String("provider")
+		model := c.String("model")
 
 		ghToken := os.Getenv("DEV_GITHUB_TOKEN")
 		if ghToken == "" {
@@ -29,9 +31,11 @@ func handleServe() cli.ActionFunc {
 		srv := &http.Server{
 			Addr: net.JoinHostPort(host, port),
 			Handler: serve.Handle(serve.HandleOpts{
-				GitHubUser:     os.Getenv("DEV_GITHUB_USER"),
-				GitHubClient:   ghClient,
-				AllowedOrigins: []string{"http://" + host, "https://" + host},
+				GitHubUser:       os.Getenv("DEV_GITHUB_USER"),
+				GitHubClient:     ghClient,
+				AllowedOrigins:   []string{"http://" + host, "https://" + host},
+				OpenCodeProvider: provider,
+				OpenCodeModel:    model,
 			}),
 		}
 		go func() {
