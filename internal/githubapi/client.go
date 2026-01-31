@@ -1,7 +1,9 @@
 package githubapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -126,14 +128,21 @@ type GraphQLComment struct {
 	Author     struct {
 		Login string `json:"login"`
 	} `json:"author"`
-	CreatedAt    string     `json:"createdAt"`
-	Reactions    []Reaction `json:"reactions"`
-	IsReview     bool       `json:"-"`
-	DiffHunk     string     `json:"-"`
-	Path         string     `json:"path"`
-	Line         int        `json:"line"`
-	StartLine    int        `json:"startLine"`
-	OriginalLine int        `json:"originalLine"`
+	CreatedAt    string `json:"createdAt"`
+	IsReview     bool   `json:"-"`
+	DiffHunk     string `json:"-"`
+	Path         string `json:"path"`
+	Line         int    `json:"line"`
+	StartLine    int    `json:"startLine"`
+	OriginalLine int    `json:"originalLine"`
+	Reactions    struct {
+		Nodes []struct {
+			Content string `json:"content"`
+			User    struct {
+				Login string `json:"login"`
+			}
+		} `json:"nodes"`
+	} `json:"reactions"`
 }
 
 type GraphQLPRResponse struct {
@@ -168,13 +177,13 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 				title
 				headRefName
 				author { login }
-				comments(first: 100) {
+				comments(first: 10) {
 					nodes {
 						databaseId
 						body
 						author { login }
 						createdAt
-						reactions(first: 100) {
+						reactions(first: 10) {
 							nodes {
 								content
 								user { login }
@@ -182,10 +191,10 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 						}
 					}
 				}
-				reviews(first: 100) {
+				reviews(first: 10) {
 					nodes {
 						author { login }
-						comments(first: 100) {
+						comments(first: 10) {
 							nodes {
 								databaseId
 								body
@@ -195,7 +204,7 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 								originalLine
 								author { login }
 								createdAt
-								reactions(first: 100) {
+								reactions(first: 10) {
 									nodes {
 										content
 										user { login }
@@ -215,21 +224,49 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 		"number": number,
 	}
 
-	body := map[string]interface{}{
+	payload := map[string]interface{}{
 		"query":     query,
 		"variables": variables,
 	}
 
-	req, err := c.client.NewRequest("POST", "graphql", body)
+	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal GraphQL payload: %w", err)
 	}
 
-	var resp struct {
-		Data GraphQLPRResponse `json:"data"`
+	httpReq, err := http.NewRequest("POST", "https://api.github.com/graphql", bytes.NewReader(jsonPayload))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-	_, err = c.client.Do(ctx, req, &resp)
-	return &resp.Data, err
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+
+	httpClient := c.client.Client()
+	resp, err := httpClient.Do(httpReq.WithContext(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	type GraphQLError struct {
+		Message string `json:"message"`
+	}
+	type GraphQLResponseWrapper struct {
+		Data   GraphQLPRResponse `json:"data"`
+		Errors []GraphQLError    `json:"errors,omitempty"`
+	}
+
+	var wrapper GraphQLResponseWrapper
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return nil, fmt.Errorf("failed to decode GraphQL response: %w", err)
+	}
+
+	if len(wrapper.Errors) > 0 {
+		return nil, fmt.Errorf("GraphQL errors: %v", wrapper.Errors)
+	}
+
+	return &wrapper.Data, nil
 }
 
 func (c *Client) CreateComment(ctx context.Context, owner, repo string, number int, body string) error {

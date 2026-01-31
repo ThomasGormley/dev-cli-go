@@ -86,7 +86,7 @@ func parseGraphQLPR(data *githubapi.GraphQLPRResponse) PRDetails {
 			Author:    c.Author.Login,
 			Body:      c.Body,
 			CreatedAt: c.CreatedAt,
-			Reactions: convertReactions(c.Reactions),
+			Reactions: convertReactions(c.Reactions.Nodes),
 		})
 	}
 	for _, review := range data.Repository.PullRequest.Reviews.Nodes {
@@ -100,7 +100,7 @@ func parseGraphQLPR(data *githubapi.GraphQLPRResponse) PRDetails {
 				Line:         c.Line,
 				StartLine:    c.StartLine,
 				OriginalLine: c.OriginalLine,
-				Reactions:    convertReactions(c.Reactions),
+				Reactions:    convertReactions(c.Reactions.Nodes),
 			})
 		}
 	}
@@ -112,12 +112,17 @@ func parseGraphQLPR(data *githubapi.GraphQLPRResponse) PRDetails {
 	}
 }
 
-func convertReactions(reactions []githubapi.Reaction) []Reaction {
+func convertReactions(reactions []struct {
+	Content string `json:"content"`
+	User    struct {
+		Login string `json:"login"`
+	}
+}) []Reaction {
 	var r []Reaction
 	for _, rc := range reactions {
 		r = append(r, Reaction{
 			Content: rc.Content,
-			User:    rc.User,
+			User:    rc.User.Login,
 		})
 	}
 	return r
@@ -396,11 +401,13 @@ func fetchPRDetails(ctx context.Context, ghClient *githubapi.Client, prInfo GitH
 		return prDetails, nil
 	}
 
-	if data, err := os.ReadFile(cachePath); err == nil {
-		log.Printf("cache hit: %s", cachePath)
-		var prDetails PRDetails
-		json.Unmarshal(data, &prDetails)
-		return prDetails, nil
+	if os.Getenv("USE_CACHE") == "true" {
+		if data, err := os.ReadFile(cachePath); err == nil {
+			log.Printf("cache hit: %s", cachePath)
+			var prDetails PRDetails
+			json.Unmarshal(data, &prDetails)
+			return prDetails, nil
+		}
 	}
 
 	log.Print("cache miss: fetching real data")
@@ -460,8 +467,9 @@ func createOpencodeSession(ctx context.Context, repoPath string) (*opencode.Clie
 }
 
 func addCommentReaction(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR) {
-	log.Printf("adding eyes reaction to comment %d (diffHunk: %s)", c.ID, c.DiffHunk)
-	if c.DiffHunk != "" {
+	isReviewComment := c.FilePath != ""
+	log.Printf("adding eyes reaction to comment %d (review: %v)", c.ID, isReviewComment)
+	if isReviewComment {
 		if err := ghClient.CreatePullRequestCommentReaction(ctx, prInfo.Owner, prInfo.Repo, c.ID, "eyes"); err != nil {
 			log.Printf("failed to add PR comment reaction: %v", err)
 		} else {
@@ -521,7 +529,8 @@ func commitRepoChanges(ctx context.Context, client *opencode.Client, sessionID s
 func postCommentReply(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR, replyText string) {
 	log.Printf("creating comment to PR %d", prInfo.Number)
 	var err error
-	if c.DiffHunk != "" {
+	isReviewComment := c.FilePath != ""
+	if isReviewComment {
 		log.Printf("creating review reply to comment %d", c.ID)
 		err = ghClient.CreateReviewCommentReply(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID, replyText)
 	} else {
