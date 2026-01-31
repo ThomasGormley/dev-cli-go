@@ -2,3 +2,4 @@ bin
 tmp
 debug.log
 dev-cli-go
+.cache

@@ -29,6 +29,12 @@ type Comment struct {
 	Body            string `json:"body"`
 	CreatedAt       string `json:"createdAt"`
 	ParentCommentID int64  `json:"parentCommentId,omitempty"`
+	DiffHunk        string `json:"diffHunk,omitempty"`
+	FilePath        string `json:"filePath,omitempty"`
+	Line            int    `json:"line,omitempty"`
+	StartLine       int    `json:"startLine,omitempty"`
+	OriginalLine    int    `json:"originalLine,omitempty"`
+	OriginalPos     int    `json:"originalPos,omitempty"`
 }
 
 type PRDetails struct {
@@ -89,6 +95,11 @@ func parsePRDetails(pr *github.PullRequest, issueComments []*github.IssueComment
 			Body:            rc.GetBody(),
 			CreatedAt:       rc.GetCreatedAt().Format(time.RFC3339),
 			ParentCommentID: parentID,
+			DiffHunk:        rc.GetDiffHunk(),
+			FilePath:        rc.GetPath(),
+			Line:            int(rc.GetLine()),
+			StartLine:       int(rc.GetStartLine()),
+			OriginalLine:    int(rc.GetOriginalLine()),
 		})
 	}
 
@@ -116,24 +127,6 @@ type GitHubPR struct {
 	Owner  string
 	Repo   string
 	Number int
-}
-
-func debugCache() PRDetails {
-	return PRDetails{
-		Number:     14,
-		Title:      "agentic services",
-		BaseBranch: "main",
-		HeadBranch: "serve-cli",
-		Author:     "ThomasGormley",
-		State:      "open",
-		IsDraft:    true,
-		CreatedAt:  "2026-01-31T12:53:22Z",
-		UpdatedAt:  "2026-01-31T14:39:12Z",
-		URL:        "https://github.com/ThomasGormley/dev-cli-go/pull/14",
-		Comments: []Comment{
-			{ID: 2749631568, Author: "ThomasGormley", Body: "@ThomasGormley remove the polling logic", CreatedAt: "2026-01-31T14:39:12Z"},
-		},
-	}
 }
 
 func handleServe() cli.ActionFunc {
@@ -255,7 +248,7 @@ func chat(ctx context.Context, client *opencode.Client, sessionID string, text s
 			Directory: opencode.String(directory),
 			Model: opencode.F(opencode.SessionPromptParamsModel{
 				ProviderID: opencode.String("opencode"),
-				ModelID:    opencode.String("big-pickle"),
+				ModelID:    opencode.String("minimax-m2.1-free"),
 			}),
 			System: opencode.String("You are helping with a GitHub pull request. Follow instructions carefully."),
 			Parts:  opencode.F(parts),
@@ -275,7 +268,8 @@ func chat(ctx context.Context, client *opencode.Client, sessionID string, text s
 
 func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 	type request struct {
-		URL string `json:"url"`
+		URL       string `json:"url"`
+		CacheBust bool   `json:"cacheBust"`
 	}
 	type agentReply struct {
 		CommentID string `json:"commentId"`
@@ -313,17 +307,34 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 
 		log.Printf("PR: owner=%s repo=%s number=%d", prInfo.Owner, prInfo.Repo, prInfo.Number)
 
+		cachePath := filepath.Join(".cache", fmt.Sprintf("pr%d.json", prInfo.Number))
 		var prDetails PRDetails
-		if req.URL == "https://github.com/ThomasGormley/dev-cli-go/pull/14/" {
-			log.Print("cache hit")
-			prDetails = debugCache()
-		} else {
+
+		if req.CacheBust {
+			log.Print("cache bust: fetching real data")
 			pr, issueComments, reviewComments, err := ghClient.GetPullRequestDetails(r.Context(), prInfo.Owner, prInfo.Repo, prInfo.Number)
 			if err != nil {
 				encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
 			prDetails = parsePRDetails(pr, issueComments, reviewComments)
+			os.MkdirAll(filepath.Dir(cachePath), 0755)
+			cacheData, _ := json.MarshalIndent(prDetails, "", "  ")
+			os.WriteFile(cachePath, cacheData, 0644)
+			log.Printf("cache updated: %s", cachePath)
+		} else {
+			if data, err := os.ReadFile(cachePath); err == nil {
+				log.Printf("cache hit: %s", cachePath)
+				json.Unmarshal(data, &prDetails)
+			} else {
+				log.Print("cache miss: fetching real data")
+				pr, issueComments, reviewComments, err := ghClient.GetPullRequestDetails(r.Context(), prInfo.Owner, prInfo.Repo, prInfo.Number)
+				if err != nil {
+					encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+				prDetails = parsePRDetails(pr, issueComments, reviewComments)
+			}
 		}
 
 		var actionable []Comment
