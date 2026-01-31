@@ -19,6 +19,7 @@ func EnsureClone(ctx context.Context, owner, repo, branch string) (Repo, error) 
 		r := Repo{path: repoPath}
 		r.Fetch()
 		r.Checkout(branch)
+		r.ResetHard("origin/" + branch)
 		return r, nil
 	}
 	os.MkdirAll(filepath.Dir(repoPath), 0755)
@@ -54,6 +55,13 @@ func (r Repo) ResetHard(ref string) error {
 	cmd := exec.Command("git", "reset", "--hard", ref)
 	cmd.Dir = r.path
 	return cmd.Run()
+}
+
+func (r Repo) SyncToRemote(branch string) error {
+	if err := r.Fetch(); err != nil {
+		return err
+	}
+	return r.ResetHard("origin/" + branch)
 }
 
 func (r Repo) Status() (string, error) {

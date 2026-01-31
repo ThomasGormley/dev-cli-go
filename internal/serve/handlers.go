@@ -129,6 +129,11 @@ func handlerAgentDispatch(ghClient *githubapi.Client, user string) http.Handler 
 				continue
 			}
 
+			if err := repo.SyncToRemote(branch); err != nil {
+				log.Printf("comment %d: sync to remote failed: %v", c.ID, err)
+				continue
+			}
+
 			var commentURL string
 			if c.IsReviewComment() {
 				commentURL = fmt.Sprintf("https://github.com/%s/%s/pull/%d#discussion_r%d", prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID)
