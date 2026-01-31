@@ -201,14 +201,92 @@ func handleHealth() http.Handler {
 	})
 }
 
+type PromptFile struct {
+	Mime        string `json:"mime"`
+	Content     string `json:"content"`
+	Filename    string `json:"filename"`
+	Replacement string `json:"replacement"`
+	Start       int    `json:"start"`
+	End         int    `json:"end"`
+}
+
+func extractTextFromResponse(rsp *opencode.SessionPromptResponse) string {
+	var textParts []string
+	for _, part := range rsp.Parts {
+		if part.Type == opencode.PartTypeText && part.Text != "" {
+			textParts = append(textParts, part.Text)
+		}
+	}
+	return strings.Join(textParts, "\n")
+}
+
+func chat(ctx context.Context, client *opencode.Client, sessionID string, text string, directory string, files []PromptFile) (string, error) {
+	log.Printf("Sending message to opencode...")
+
+	var parts []opencode.SessionPromptParamsPartUnion
+	parts = append(parts, opencode.TextPartInputParam{
+		Type: opencode.F(opencode.TextPartInputType("text")),
+		Text: opencode.String(text),
+	})
+
+	for _, f := range files {
+		textParam := opencode.FilePartSourceParam{
+			Type: opencode.F(opencode.FilePartSourceType("file")),
+			Text: opencode.F(opencode.FilePartSourceTextParam{
+				Start: opencode.Int(int64(f.Start)),
+				End:   opencode.Int(int64(f.End)),
+				Value: opencode.String(f.Replacement),
+			}),
+			Path: opencode.String(f.Filename),
+		}
+		parts = append(parts, opencode.FilePartInputParam{
+			Type:     opencode.F(opencode.FilePartInputType("file")),
+			Mime:     opencode.String(f.Mime),
+			URL:      opencode.String(fmt.Sprintf("data:%s;base64,%s", f.Mime, f.Content)),
+			Filename: opencode.String(f.Filename),
+			Source:   opencode.Raw[opencode.FilePartSourceUnionParam](textParam),
+		})
+	}
+
+	rsp, err := client.Session.Prompt(
+		ctx,
+		sessionID,
+		opencode.SessionPromptParams{
+			Directory: opencode.String(directory),
+			Model: opencode.F(opencode.SessionPromptParamsModel{
+				ProviderID: opencode.String("opencode"),
+				ModelID:    opencode.String("big-pickle"),
+			}),
+			System: opencode.String("You are helping with a GitHub pull request. Follow instructions carefully."),
+			Parts:  opencode.F(parts),
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to send prompt: %w", err)
+	}
+
+	replyText := extractTextFromResponse(rsp)
+	if replyText == "" {
+		return "", fmt.Errorf("failed to parse the text response")
+	}
+
+	return replyText, nil
+}
+
 func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 	type request struct {
 		URL string `json:"url"`
 	}
+	type agentReply struct {
+		CommentID string `json:"commentId"`
+		Reply     string `json:"reply"`
+	}
 	type response struct {
-		Opencode string    `json:"opencode"`
-		Comments []Comment `json:"comments"`
-		RepoPath string    `json:"repoPath"`
+		SessionID    string       `json:"sessionId"`
+		Comments     []Comment    `json:"comments"`
+		AgentReplies []agentReply `json:"agentReplies"`
+		RepoPath     string       `json:"repoPath"`
+		Status       string       `json:"status"`
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -291,32 +369,28 @@ func handlerAgentDispatch(ghClient *githubapi.Client) http.Handler {
 			}
 		}()
 
+		var agentReplies []agentReply
 		for _, c := range actionable {
 			promptText := strings.TrimSpace(strings.TrimPrefix(c.Body, "@"+c.Author))
-			rsp, err := client.Session.Prompt(
-				r.Context(),
-				session.ID,
-				opencode.SessionPromptParams{
-					Directory: opencode.String(repoPath),
-					System:    opencode.String("You are helping with a GitHub pull request. Follow instructions carefully."),
-					Parts: opencode.F(
-						[]opencode.SessionPromptParamsPartUnion{
-							opencode.TextPartInputParam{
-								Type: opencode.F(opencode.TextPartInputType("text")),
-								Text: opencode.String(promptText),
-							},
-						}),
-				},
-			)
+			replyText, err := chat(r.Context(), client, session.ID, promptText, repoPath, []PromptFile{})
 			if err != nil {
 				log.Printf("failed to send prompt: %v", err)
+				continue
 			}
-			encode(w, http.StatusOK, response{Opencode: rsp.JSON.RawJSON()})
+			agentReplies = append(agentReplies, agentReply{
+				CommentID: fmt.Sprintf("%d", c.ID),
+				Reply:     replyText,
+			})
+
 		}
 
+		status := "completed"
+		if len(agentReplies) == 0 {
+			status = "no_replies"
+		}
+		encode(w, http.StatusOK, response{SessionID: session.ID, Comments: actionable, AgentReplies: agentReplies, RepoPath: repoPath, Status: status})
 	})
 }
-
 func addRoutes(mux *http.ServeMux, ghClient *githubapi.Client) {
 	mux.Handle("/api/health", handleHealth())
 	mux.Handle("/api/agent/dispatch", handlerAgentDispatch(ghClient))
