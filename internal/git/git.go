@@ -133,13 +133,6 @@ func Checkout(branch string) error {
 	return exec.Command("git", "checkout", branch).Run()
 }
 
-// CheckoutIn switches to the specified branch in the given directory
-func CheckoutIn(branch, dir string) error {
-	cmd := exec.Command("git", "checkout", branch)
-	cmd.Dir = dir
-	return cmd.Run()
-}
-
 // Pull fetches and merges changes from the remote
 func Pull() error {
 	return exec.Command("git", "pull").Run()
