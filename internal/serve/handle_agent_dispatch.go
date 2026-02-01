@@ -90,6 +90,7 @@ func handlerAgentDispatch(queue queuelib.Queue[agentDispatchJob], ghClient githu
 				log.Printf("failed to enqueue comment %d: %v", c.ID, err)
 				continue
 			}
+			log.Printf("enqueued job for comment %d on PR %s/%s/%d", c.ID, prInfo.Owner, prInfo.Repo, prInfo.Number)
 			enqueued++
 		}
 
