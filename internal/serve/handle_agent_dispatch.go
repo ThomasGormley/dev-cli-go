@@ -94,11 +94,11 @@ func handlerAgentDispatch(queue queuelib.Queue[agentDispatchJob], ghClient githu
 			enqueued++
 		}
 
-		status := "accepted"
 		if enqueued == 0 {
-			status = "no_actionable"
+			encode(w, http.StatusBadRequest, map[string]string{"error": "no actionable comments found"})
+			return
 		}
-		encode(w, http.StatusAccepted, response{SessionID: sessionID, Comments: actionable, RepoPath: repo.Path(), Status: status})
+		encode(w, http.StatusAccepted, response{SessionID: sessionID, Comments: actionable, RepoPath: repo.Path(), Status: "accepted"})
 	})
 }
 
