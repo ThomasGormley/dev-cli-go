@@ -220,6 +220,18 @@ func Run(
 						Args:        true,
 						Action:      handleAgentDispatch(serveClient),
 					},
+					{
+						Name:        "attach",
+						Usage:       "Open the dev agent web UI",
+						Description: "Opens the OpenCode web UI in the browser",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:  "url",
+								Usage: "URL of the OpenCode server (auto-detected from serve if not provided)",
+							},
+						},
+						Action: handleAgentAttach(serveClient),
+					},
 				},
 			},
 			{

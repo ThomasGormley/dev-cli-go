@@ -129,13 +129,12 @@ func runAgentDispatchJob(ctx context.Context, ghClient githubapi.Client, opencod
 
 	systemPrompt := buildPRSystemPrompt(prDetails)
 
-	promptText := prompt(c)
-	replyText, err := promptJob(ctx, opencodeClient, sessionID, promptText, systemPrompt, repoPath, config)
+	replyText, err := chat(ctx, opencodeClient, sessionID, prompt(c), systemPrompt, repoPath, config)
 	if err != nil {
 		return fmt.Errorf("prompting job: %w", err)
 	}
 
-	commitMsg, err := promptJob(ctx,
+	commitMsg, err := chat(ctx,
 		opencodeClient,
 		sessionID,
 		fmt.Sprintf("Summarize the following in less than 40 characters for the purposes of a commit message:\n\n%s", replyText),
@@ -214,9 +213,7 @@ func commit(repo git.Repo, branch string, commitMessage string) error {
 func comment(ctx context.Context, ghClient githubapi.Client, c Comment, prInfo GitHubPR, replyText string) error {
 	log.Printf("creating comment to PR %d", prInfo.Number)
 	var err error
-	isReviewComment := c.IsReviewComment()
-	if isReviewComment {
-		log.Printf("creating review reply to comment %d", c.ID)
+	if c.IsReviewComment() {
 		err = ghClient.CreateReviewCommentReply(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID, replyText)
 	} else {
 		err = ghClient.CreateComment(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number, replyText)
@@ -247,7 +244,7 @@ func react(ctx context.Context, ghClient githubapi.Client, c Comment, prInfo Git
 	return nil
 }
 
-func promptJob(ctx context.Context, client opencode.Client, sessionID string, taskText string, systemPrompt string, repoPath string, config OpenCodeConfig) (string, error) {
+func chat(ctx context.Context, client opencode.Client, sessionID string, taskText string, systemPrompt string, repoPath string, config OpenCodeConfig) (string, error) {
 	var parts []opencode.SessionPromptParamsPartUnion
 	parts = append(parts, opencode.TextPartInputParam{
 		Type: opencode.F(opencode.TextPartInputType("text")),
@@ -271,22 +268,18 @@ func promptJob(ctx context.Context, client opencode.Client, sessionID string, ta
 		return "", fmt.Errorf("prompting job: %w", err)
 	}
 
-	replyText := textFromRsp(rsp)
-	if replyText == "" {
-		return "", fmt.Errorf("parsing response")
-	}
-
-	return replyText, nil
-}
-
-func textFromRsp(rsp *opencode.SessionPromptResponse) string {
 	var textParts []string
 	for _, part := range rsp.Parts {
 		if part.Type == opencode.PartTypeText && part.Text != "" {
 			textParts = append(textParts, part.Text)
 		}
 	}
-	return strings.Join(textParts, "\n")
+	replyText := strings.Join(textParts, "\n")
+	if replyText == "" {
+		return "", fmt.Errorf("parsing response")
+	}
+
+	return replyText, nil
 }
 
 func filterActionableComments(comments []Comment, user string) []Comment {

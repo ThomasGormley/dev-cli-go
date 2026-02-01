@@ -9,11 +9,23 @@ import (
 
 func handleHealth(config OpenCodeConfig) http.Handler {
 	type response struct {
-		Status       string `json:"status"`
-		OpenCodeLive bool   `json:"opencodeLive"`
+		Status         string `json:"status"`
+		OpenCodeLive   bool   `json:"opencodeLive"`
+		OpenCodeURL    string `json:"opencodeUrl"`
+		OpenCodeStatus string `json:"opencodeStatus"`
+	}
+	running := IsOpenCodeRunning(config.Host, config.Port)
+	status := "stopped"
+	if running {
+		status = "running"
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		encode(w, http.StatusOK, response{Status: "ok", OpenCodeLive: IsOpenCodeRunning(config.Host, config.Port)})
+		encode(w, http.StatusOK, response{
+			Status:         "ok",
+			OpenCodeLive:   running,
+			OpenCodeURL:    "http://" + config.Host + ":" + config.Port,
+			OpenCodeStatus: status,
+		})
 	})
 }
 
