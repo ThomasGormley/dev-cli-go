@@ -68,36 +68,36 @@ func (c *Client) IsServerRunning(ctx context.Context) bool {
 	return resp.StatusCode == 200
 }
 
-func (c *Client) GetHealth(ctx context.Context) (*HealthResponse, error) {
+func (c Client) GetHealth(ctx context.Context) (HealthResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/health", nil)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+		return HealthResponse{}, fmt.Errorf("creating request: %w", err)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching health: %w", err)
+		return HealthResponse{}, fmt.Errorf("fetching health: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading body: %w", err)
+		return HealthResponse{}, fmt.Errorf("reading body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("health check failed: %s", respBody)
+		return HealthResponse{}, fmt.Errorf("health check failed: %s", respBody)
 	}
 
 	var result HealthResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
+		return HealthResponse{}, fmt.Errorf("decoding response: %w", err)
 	}
 
-	return &result, nil
+	return result, nil
 }
 
 func (c *Client) DispatchAgent(ctx context.Context, prURL string) (*AgentResponse, error) {
