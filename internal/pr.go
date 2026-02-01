@@ -24,42 +24,35 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 			return err
 		}
 
-		// prStatus, err := ghCli.PRStatus("")
-		// if err != nil {
-		// 	// non critical error, just continue
-		// }
+		force := c.Bool("force")
+		var title, body string
+		var err error
 
-		// if !prStatus.CurrentBranch.Closed {
-		// 	print.Info(stdout,
-		// 		print.ColorNote(print.InfoSym),
-		// 		"Pull request already exists for this branch",
-		// 	)
-		// 	print.Info(stdout, print.WrapTop(
-		// 		print.ColorNote("Title:"),
-		// 		prStatus.CurrentBranch.Title,
-		// 	))
-		// 	print.Info(stdout, print.WrapBottom(
-		// 		print.ColorNote("URL:"),
-		// 		prStatus.CurrentBranch.URL,
-		// 	))
+		if force {
+			branch, err := git.CurrentBranch()
+			if err != nil {
+				return err
+			}
+			title = prTitleFromBranch(branch)
+			if title == "" {
+				title = branch
+			}
+			body, err = bodyOrPRTemplate(c)
+			if err != nil {
+				return err
+			}
+		} else {
+			title, err = titleOrPrompt(c)
+			if err != nil {
+				return err
+			}
 
-		// 	if err := promptForOpen(stdout, ghCli); err != nil {
-		// 		print.Warning(stdout, print.WarningSym, "Could not open PR in browser")
-		// 	}
-		// 	return cli.Exit("", 0)
-		// }
-
-		title, err := titleOrPrompt(c)
-		if err != nil {
-			return err
+			body, err = bodyOrPRTemplate(c)
+			if err != nil {
+				return err
+			}
 		}
 
-		body, err := bodyOrPRTemplate(c)
-		if err != nil {
-			return err
-		}
-
-		// Show info about what we're using
 		base := c.String("base")
 		draft := c.Bool("draft")
 		if body == "" {
@@ -80,8 +73,10 @@ func handlePRCreate(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.Actio
 			return cli.Exit("", 1)
 		}
 
-		if err := promptForOpen(stdout, ghCli); err != nil {
-			return err
+		if !force {
+			if err := promptForOpen(stdout, ghCli); err != nil {
+				return err
+			}
 		}
 
 		return cli.Exit("", 0)

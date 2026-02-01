@@ -79,6 +79,11 @@ func Run(
 								Aliases: []string{"d"},
 								Value:   true,
 							},
+							&cli.BoolFlag{
+								Name:    "force",
+								Usage:   "skip prompts and use defaults",
+								Aliases: []string{"f"},
+							},
 						},
 					},
 					{
@@ -212,6 +217,7 @@ func Run(
 				Name:        "agent",
 				Usage:       "Dev agent operations",
 				Description: "Commands for interacting with the dev agent service",
+				Before:      serveBeforeFunc(serveClient),
 				Subcommands: []*cli.Command{
 					{
 						Name:        "dispatch",
@@ -219,6 +225,18 @@ func Run(
 						Description: "Sends a GitHub PR URL to the running dev agent server for AI processing",
 						Args:        true,
 						Action:      handleAgentDispatch(serveClient),
+					},
+					{
+						Name:        "attach",
+						Usage:       "Open the dev agent web UI",
+						Description: "Opens the OpenCode web UI in the browser",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:  "url",
+								Usage: "URL of the OpenCode server (auto-detected from serve if not provided)",
+							},
+						},
+						Action: handleAgentAttach(serveClient),
 					},
 				},
 			},
