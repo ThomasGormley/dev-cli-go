@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sst/opencode-sdk-go"
+	"github.com/sst/opencode-sdk-go/option"
 	"github.com/thomasgormley/dev-cli-go/internal/githubapi"
 	"github.com/thomasgormley/dev-cli-go/internal/serve"
 	"github.com/urfave/cli/v2"
@@ -39,12 +41,15 @@ func handleServe() cli.ActionFunc {
 			}
 		}
 
+		opencodeClient := opencode.NewClient(option.WithBaseURL(fmt.Sprintf("http://%s:%s", opencodeHost, opencodePort)))
+
 		srv := &http.Server{
 			Addr: net.JoinHostPort(host, port),
 			Handler: serve.Handle(c.Context, serve.HandleOpts{
 				GitHubUser:     os.Getenv("DEV_GITHUB_USER"),
-				GitHubClient:   ghClient,
+				GitHubClient:   *ghClient,
 				AllowedOrigins: []string{"http://" + host, "https://" + host},
+				OpenCodeClient: *opencodeClient,
 				OpenCode: serve.OpenCodeConfig{
 					Provider: provider,
 					Model:    model,
