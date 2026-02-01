@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -200,6 +201,7 @@ type prsLoadedMsg struct {
 type actionDoneMsg struct {
 	action string
 	err    error
+	exit   bool
 }
 
 type loadingState int
@@ -271,7 +273,7 @@ func fetchPRsCmd(client gh.GitHubClienter) tea.Cmd {
 func openPRCmd(client gh.GitHubClienter, number int) tea.Cmd {
 	return func() tea.Msg {
 		err := client.ViewPR(fmt.Sprintf("%d", number))
-		return actionDoneMsg{action: "open", err: err}
+		return actionDoneMsg{action: "open", err: err, exit: false}
 	}
 }
 
@@ -331,6 +333,7 @@ func (m PRListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list = list.New(items, delegate, m.width, m.height)
 		m.list.Title = "Pull Requests"
 		m.list.SetShowHelp(true)
+		m.list.StatusMessageLifetime = 3 * time.Second
 		m.list.AdditionalShortHelpKeys = func() []key.Binding {
 			return []key.Binding{
 				m.KeyMap.Open,
@@ -338,15 +341,21 @@ func (m PRListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.KeyMap.Dispatch,
 			}
 		}
+
 		return m, nil
 
 	case actionDoneMsg:
 		if msg.err != nil {
 			m.err = msg.err
 			m.action = msg.action
+			m.done = true
+			return m, tea.Quit
 		}
-		m.done = true
-		return m, tea.Quit
+		if msg.exit {
+			m.done = true
+			return m, tea.Quit
+		}
+		return m, nil
 
 	case tea.KeyMsg:
 		if m.state != stateReady {
@@ -365,11 +374,19 @@ func (m PRListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, m.KeyMap.Open):
 			if item, ok := m.list.SelectedItem().(PRListItem); ok {
-				return m, openPRCmd(m.ghClient, item.pr.Number)
+				statusCmd := m.list.
+					NewStatusMessage(
+						m.Style.Title.Render("Opened PR #" + fmt.Sprintf("%d", item.pr.Number)),
+					)
+				return m, tea.Batch(openPRCmd(m.ghClient, item.pr.Number), statusCmd)
 			}
 		case key.Matches(msg, m.KeyMap.Checkout):
 			if item, ok := m.list.SelectedItem().(PRListItem); ok {
-				return m, checkoutCmd(item.pr.HeadRefName)
+				statusCmd := m.list.
+					NewStatusMessage(
+						m.Style.Title.Render("Checked out branch '" + item.pr.HeadRefName + "'"),
+					)
+				return m, tea.Batch(checkoutCmd(item.pr.HeadRefName), statusCmd)
 			}
 		case key.Matches(msg, m.KeyMap.Dispatch):
 			if item, ok := m.list.SelectedItem().(PRListItem); ok {
