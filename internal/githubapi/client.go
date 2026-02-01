@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/google/go-github/v69/github"
 	"golang.org/x/oauth2"
@@ -14,34 +13,6 @@ import (
 
 type Client struct {
 	client *github.Client
-}
-
-func NewClient(token string) *Client {
-	ctx := context.Background()
-	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: token},
-	)
-	tc := oauth2.NewClient(ctx, ts)
-	return &Client{
-		client: github.NewClient(tc),
-	}
-}
-
-func (c *Client) SearchMentions(ctx context.Context, username string, since time.Time) ([]*github.Issue, error) {
-	query := fmt.Sprintf("@%s is:open updated:>%s", username, since.Format("2006-01-02"))
-	opts := &github.SearchOptions{
-		ListOptions: github.ListOptions{PerPage: 30},
-	}
-	result, _, err := c.client.Search.Issues(ctx, query, opts)
-	if err != nil {
-		return nil, err
-	}
-	return result.Issues, nil
-}
-
-type Reaction struct {
-	Content string `json:"content"`
-	User    string `json:"user"`
 }
 
 type GraphQLComment struct {
@@ -112,6 +83,17 @@ type GraphQLPRResponse struct {
 			} `json:"files"`
 		} `json:"pullRequest"`
 	} `json:"repository"`
+}
+
+func NewClient(token string) *Client {
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+	return &Client{
+		client: github.NewClient(tc),
+	}
 }
 
 func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number int) (*GraphQLPRResponse, error) {
