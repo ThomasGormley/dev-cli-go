@@ -36,8 +36,8 @@ func (c *Client) String() string {
 	return c.baseURL
 }
 
-func NewClient(baseURL string) *Client {
-	return &Client{
+func NewClient(baseURL string) Client {
+	return Client{
 		baseURL: baseURL,
 		http:    http.DefaultClient,
 	}

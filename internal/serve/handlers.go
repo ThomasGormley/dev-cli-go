@@ -11,10 +11,6 @@ import (
 	"github.com/thomasgormley/dev-cli-go/internal/githubapi"
 )
 
-type request struct {
-	URL string `json:"url"`
-}
-
 func handleHealth(config OpenCodeConfig) http.Handler {
 	type response struct {
 		Status       string `json:"status"`
@@ -26,6 +22,9 @@ func handleHealth(config OpenCodeConfig) http.Handler {
 }
 
 func handlerAgentDispatch(ghClient *githubapi.Client, user string, opencodeConfig OpenCodeConfig) http.Handler {
+	type request struct {
+		URL string `json:"url"`
+	}
 	type agentReply struct {
 		CommentID string `json:"commentId"`
 		Reply     string `json:"reply"`
@@ -161,6 +160,9 @@ func handlerAgentDispatch(ghClient *githubapi.Client, user string, opencodeConfi
 }
 
 func handlerDebug(ghClient *githubapi.Client) http.Handler {
+	type request struct {
+		URL string `json:"url"`
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			encode(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})

@@ -8,6 +8,7 @@ import (
 	"os/signal"
 
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
+	"github.com/thomasgormley/dev-cli-go/internal/serve"
 	"github.com/urfave/cli/v2"
 )
 
@@ -38,6 +39,7 @@ func Run(
 		}
 	}()
 
+	serveClient := serve.NewClient(baseURL)
 	app := &cli.App{
 		Name:                 "dev",
 		HelpName:             "dev",
@@ -95,7 +97,7 @@ func Run(
 						Name:    "list",
 						Usage:   "List pull requests",
 						Aliases: []string{"l"},
-						Action:  handlePRList(stdout, stderr, ghClient),
+						Action:  handlePRList(stdout, stderr, ghClient, serveClient),
 					},
 				},
 			},
@@ -205,7 +207,7 @@ func Run(
 				Subcommands: []*cli.Command{
 					{
 						Name:   "dispatch",
-						Action: handleAgentDispatch(baseURL),
+						Action: handleAgentDispatch(serveClient),
 						Args:   true,
 					},
 				},

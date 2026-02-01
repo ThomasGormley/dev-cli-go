@@ -13,6 +13,19 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/thomasgormley/dev-cli-go/internal/git"
+	"github.com/thomasgormley/dev-cli-go/internal/serve"
+)
+
+// Color palette for PR list component
+const (
+	colorNeutral    = "#e1e2e7"
+	colorPrimary    = "#2e7de9"
+	colorSuccess    = "#587539"
+	colorWarning    = "#8c6c3e"
+	colorError      = "#c94060"
+	colorDiffAdd    = "#4f8f7b"
+	colorDiffDelete = "#d05f7c"
+	colorDimmed     = "#6c7086"
 )
 
 type PRListKeyMap struct {
@@ -61,17 +74,60 @@ type PRListStyle struct {
 	Empty       lipgloss.Style
 	Success     lipgloss.Style
 	Error       lipgloss.Style
+
+	// List component styles
+	ListStyles          list.Styles
+	ListItemStyles      list.DefaultItemStyles
+	ListItemAddStyle    lipgloss.Style
+	ListItemDeleteStyle lipgloss.Style
+}
+
+type palette struct {
+	neutral, primary, success, warning, errorColor lipgloss.Color
+	diffAdd, diffDelete, dimmed                    lipgloss.Color
 }
 
 func DefaultPRListStyle() PRListStyle {
+	c := palette{
+		neutral:    lipgloss.Color("#e1e2e7"),
+		primary:    lipgloss.Color("#2e7de9"),
+		success:    lipgloss.Color("#587539"),
+		warning:    lipgloss.Color("#8c6c3e"),
+		errorColor: lipgloss.Color("#c94060"),
+		diffAdd:    lipgloss.Color("#4f8f7b"),
+		diffDelete: lipgloss.Color("#d05f7c"),
+		dimmed:     lipgloss.Color("#6c7086"),
+	}
+
+	listStyles := list.DefaultStyles()
+	listStyles.Title = lipgloss.NewStyle().
+		Background(c.primary).Foreground(c.neutral).Padding(0, 1)
+	listStyles.StatusBar = lipgloss.NewStyle().
+		Foreground(c.warning).Padding(0, 0, 1, 2)
+	listStyles.StatusEmpty = lipgloss.NewStyle().Foreground(c.warning)
+	listStyles.StatusBarActiveFilter = lipgloss.NewStyle().Foreground(c.neutral)
+
+	itemStyles := list.NewDefaultItemStyles()
+	itemStyles.NormalTitle = itemStyles.NormalTitle.Foreground(c.neutral)
+	itemStyles.NormalDesc = itemStyles.NormalDesc.Foreground(c.warning)
+	itemStyles.SelectedTitle = itemStyles.SelectedTitle.
+		Foreground(c.primary).BorderForeground(c.primary)
+	itemStyles.SelectedDesc = itemStyles.SelectedTitle.Foreground(c.neutral)
+	itemStyles.DimmedTitle = itemStyles.DimmedTitle.Foreground(c.dimmed)
+	itemStyles.DimmedDesc = itemStyles.DimmedDesc.Foreground(c.dimmed)
+
 	return PRListStyle{
-		Title:       lipgloss.NewStyle().Bold(true),
-		Selected:    lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
-		Description: lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
-		Spinner:     lipgloss.NewStyle().Foreground(lipgloss.Color("6")),
-		Empty:       lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true),
-		Success:     lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
-		Error:       lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
+		Title:               lipgloss.NewStyle().Bold(true),
+		Selected:            lipgloss.NewStyle().Foreground(c.primary),
+		Description:         lipgloss.NewStyle().Foreground(c.neutral),
+		Spinner:             lipgloss.NewStyle().Foreground(c.primary),
+		Empty:               lipgloss.NewStyle().Foreground(c.neutral).Italic(true),
+		Success:             lipgloss.NewStyle().Foreground(c.success),
+		Error:               lipgloss.NewStyle().Foreground(c.errorColor),
+		ListItemAddStyle:    lipgloss.NewStyle().Foreground(c.diffAdd),
+		ListItemDeleteStyle: lipgloss.NewStyle().Foreground(c.diffDelete),
+		ListStyles:          listStyles,
+		ListItemStyles:      itemStyles,
 	}
 }
 
@@ -106,12 +162,11 @@ type prListDelegate struct {
 	spacing  int
 }
 
-func newPRListDelegate() prListDelegate {
-	s := list.NewDefaultItemStyles()
+func newPRListDelegate(style PRListStyle) prListDelegate {
 	return prListDelegate{
-		styles:   s,
-		addStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
-		delStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("1")),
+		styles:   style.ListItemStyles,
+		addStyle: style.ListItemAddStyle,
+		delStyle: style.ListItemDeleteStyle,
 		height:   2,
 		spacing:  0,
 	}
@@ -229,7 +284,7 @@ type PRListModel struct {
 	height int
 }
 
-func NewPRList(ghClient gh.GitHubClienter) PRListModel {
+func NewPRList(ghClient gh.GitHubClienter, serveClient serve.Client) PRListModel {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
@@ -329,9 +384,10 @@ func (m PRListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items[i] = PRListItem{pr: pr}
 		}
 
-		delegate := newPRListDelegate()
+		delegate := newPRListDelegate(m.Style)
 		m.list = list.New(items, delegate, m.width, m.height)
 		m.list.Title = "Pull Requests"
+		m.list.Styles = m.Style.ListStyles
 		m.list.SetShowHelp(true)
 		m.list.StatusMessageLifetime = 3 * time.Second
 		m.list.AdditionalShortHelpKeys = func() []key.Binding {

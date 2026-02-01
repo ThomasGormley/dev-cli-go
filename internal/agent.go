@@ -2,18 +2,16 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/thomasgormley/dev-cli-go/internal/serve"
 	"github.com/urfave/cli/v2"
 )
 
-func handleAgentDispatch(apiURL string) cli.ActionFunc {
+func handleAgentDispatch(client serve.Client) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		client := serve.NewClient(apiURL)
 
 		if !client.IsServerRunning(c.Context) {
-			return fmt.Errorf("server not running at %s\nStart with: dev serve", apiURL)
+			return errors.New("dev-cli server not running start with: dev serve")
 		}
 
 		urlArg := c.Args().First()

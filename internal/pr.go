@@ -12,6 +12,7 @@ import (
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/thomasgormley/dev-cli-go/internal/git"
 	"github.com/thomasgormley/dev-cli-go/internal/print"
+	"github.com/thomasgormley/dev-cli-go/internal/serve"
 	"github.com/thomasgormley/dev-cli-go/internal/spinner"
 	"github.com/thomasgormley/dev-cli-go/internal/ui"
 	"github.com/urfave/cli/v2"
@@ -150,14 +151,14 @@ func handlePRCopy(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 	}
 }
 
-func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
+func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter, serveClient serve.Client) cli.ActionFunc {
 	return func(c *cli.Context) error {
 		if !git.IsRepo() {
 			print.Error(stderr, "Not a git repository")
 			return cli.Exit("", 1)
 		}
 
-		model := ui.NewPRList(ghCli)
+		model := ui.NewPRList(ghCli, serveClient)
 		_, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
 		if err != nil {
 			return cli.Exit(err.Error(), 1)
