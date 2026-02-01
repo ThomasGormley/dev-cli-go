@@ -21,21 +21,39 @@ func handleServe() cli.ActionFunc {
 		var host, port = c.String("host"), c.String("port")
 		provider := c.String("provider")
 		model := c.String("model")
+		startOpenCode := c.Bool("start-opencode")
+		opencodeHost := c.String("opencode-host")
+		opencodePort := c.String("opencode-port")
 
 		ghToken := os.Getenv("DEV_GITHUB_TOKEN")
 		if ghToken == "" {
 			return fmt.Errorf("DEV_GITHUB_TOKEN environment variable required")
 		}
 		ghClient := githubapi.NewClient(ghToken)
+		if startOpenCode {
+			config := serve.OpenCodeConfig{Host: opencodeHost, Port: opencodePort}
+			started, closer, err := serve.StartOpenCode(c.Context, config, 30*time.Second)
+			defer closer()
+			if err != nil {
+				log.Printf("warning: failed to start OpenCode: %v", err)
+			}
+			if started {
+				log.Printf("started OpenCode")
+			}
+		}
 
 		srv := &http.Server{
 			Addr: net.JoinHostPort(host, port),
 			Handler: serve.Handle(serve.HandleOpts{
-				GitHubUser:       os.Getenv("DEV_GITHUB_USER"),
-				GitHubClient:     ghClient,
-				AllowedOrigins:   []string{"http://" + host, "https://" + host},
-				OpenCodeProvider: provider,
-				OpenCodeModel:    model,
+				GitHubUser:     os.Getenv("DEV_GITHUB_USER"),
+				GitHubClient:   ghClient,
+				AllowedOrigins: []string{"http://" + host, "https://" + host},
+				OpenCode: serve.OpenCodeConfig{
+					Provider: provider,
+					Model:    model,
+					Host:     opencodeHost,
+					Port:     opencodePort,
+				},
 			}),
 		}
 		go func() {

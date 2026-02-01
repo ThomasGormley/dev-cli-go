@@ -124,6 +124,8 @@ type PullRequest struct {
 	HeadRefName string `json:"headRefName"`
 	BaseRefName string `json:"baseRefName"`
 	UpdatedAt   string `json:"updatedAt"`
+	Additions   int    `json:"additions"`
+	Deletions   int    `json:"deletions"`
 }
 
 type PRStatusResponse struct {
@@ -222,7 +224,7 @@ func (g *ghClient) ListPRs() ([]PullRequest, error) {
 		"--repo", repo.NameWithOwner,
 		"--author", "@me",
 		"--state", "open",
-		"--json", "number,title,url,isDraft,headRefName,baseRefName,updatedAt",
+		"--json", "number,title,url,isDraft,headRefName,baseRefName,updatedAt,additions,deletions",
 	}
 	cmd := g.prepareCmd("gh", args...)
 	var outBuffer bytes.Buffer

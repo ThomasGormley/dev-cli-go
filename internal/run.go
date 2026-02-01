@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 
@@ -182,6 +181,21 @@ func Run(
 						EnvVars:  []string{"DEV_AGENT_MODEL"},
 						Required: true,
 					},
+					&cli.BoolFlag{
+						Name:  "start-opencode",
+						Usage: "start OpenCode server",
+						Value: true,
+					},
+					&cli.StringFlag{
+						Name:  "opencode-host",
+						Value: "localhost",
+						Usage: "OpenCode server host",
+					},
+					&cli.StringFlag{
+						Name:  "opencode-port",
+						Value: "3366",
+						Usage: "OpenCode server port",
+					},
 				},
 				Action: handleServe(),
 			},
@@ -191,7 +205,7 @@ func Run(
 				Subcommands: []*cli.Command{
 					{
 						Name:   "dispatch",
-						Action: handleAgentDispatch(http.DefaultClient),
+						Action: handleAgentDispatch(baseURL),
 						Args:   true,
 					},
 				},

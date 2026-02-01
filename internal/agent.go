@@ -1,49 +1,31 @@
 package cli
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
 
+	"github.com/thomasgormley/dev-cli-go/internal/serve"
 	"github.com/urfave/cli/v2"
 )
 
-func handleAgentDispatch(client *http.Client) cli.ActionFunc {
-
+func handleAgentDispatch(apiURL string) cli.ActionFunc {
 	return func(c *cli.Context) error {
+		client := serve.NewClient(apiURL)
+
+		if !client.IsServerRunning(c.Context) {
+			return fmt.Errorf("server not running at %s\nStart with: dev serve", apiURL)
+		}
+
 		urlArg := c.Args().First()
 		if urlArg == "" {
 			return errors.New("url is required")
 		}
 
-		reqBody := map[string]string{"url": urlArg}
-		bodyBytes, err := json.Marshal(reqBody)
+		_, err := client.DispatchAgent(c.Context, urlArg)
 		if err != nil {
-			return fmt.Errorf("encoding body: %w", err)
+			return err
 		}
 
-		reqUrl := baseURL + "/api/agent/dispatch"
-		req, err := http.NewRequest("POST", reqUrl, bytes.NewReader(bodyBytes))
-		if err != nil {
-			return fmt.Errorf("creating request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		rsp, err := client.Do(req)
-		if err != nil {
-			return fmt.Errorf("dispatching to agent: %w", err)
-		}
-
-		defer rsp.Body.Close()
-		bytes, err := io.ReadAll(rsp.Body)
-		if err != nil {
-			return fmt.Errorf("reading body: %w", err)
-		}
-		log.Printf("[%d] %s", rsp.StatusCode, bytes)
 		return nil
 	}
 }

@@ -6,32 +6,34 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
-	opencode "github.com/sst/opencode-sdk-go"
-	"github.com/sst/opencode-sdk-go/option"
 	"github.com/thomasgormley/dev-cli-go/internal/git"
 	"github.com/thomasgormley/dev-cli-go/internal/githubapi"
 )
 
 type HandleOpts struct {
-	GitHubUser       string
-	GitHubClient     *githubapi.Client
-	AllowedOrigins   []string
-	OpenCodeProvider string
-	OpenCodeModel    string
+	GitHubUser     string
+	GitHubClient   *githubapi.Client
+	AllowedOrigins []string
+	OpenCode       OpenCodeConfig
+}
+
+type OpenCodeConfig struct {
+	Provider string
+	Model    string
+	Host     string
+	Port     string
 }
 
 func Handle(opt HandleOpts) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/api/health", handleHealth())
+	mux.Handle("/api/health", handleHealth(opt.OpenCode))
 	mux.Handle("/api/debug", handlerDebug(opt.GitHubClient))
-	mux.Handle("/api/agent/dispatch", handlerAgentDispatch(opt.GitHubClient, opt.GitHubUser, opt.OpenCodeProvider, opt.OpenCodeModel))
+	mux.Handle("/api/agent/dispatch", opencodeCheckMiddleware(opt.OpenCode, handlerAgentDispatch(opt.GitHubClient, opt.GitHubUser, opt.OpenCode)))
 
 	var handler http.Handler = mux
 	handler = corsMiddleware(handler, opt.AllowedOrigins)
@@ -54,6 +56,16 @@ func loggingMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[%s] %s", r.Method, r.URL.Path)
 		h.ServeHTTP(w, r)
+	})
+}
+
+func opencodeCheckMiddleware(config OpenCodeConfig, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !IsOpenCodeRunning(config.Host, config.Port) {
+			encode(w, http.StatusServiceUnavailable, map[string]string{"error": "OpenCode not available"})
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -160,7 +172,28 @@ func parseGitHubPRURL(url string) (GitHubPR, error) {
 	}, nil
 }
 
-func parseGraphQLPR(data *githubapi.GraphQLPRResponse) PRDetails {
+func convertReactions(reactions []struct {
+	Content string `json:"content"`
+	User    struct {
+		Login string `json:"login"`
+	}
+}) []Reaction {
+	var r []Reaction
+	for _, rc := range reactions {
+		r = append(r, Reaction{
+			Content: rc.Content,
+			User:    rc.User.Login,
+		})
+	}
+	return r
+}
+
+func fetchPRDetails(ctx context.Context, ghClient *githubapi.Client, prInfo GitHubPR) (PRDetails, error) {
+	data, err := ghClient.GetPRDetails(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number)
+	if err != nil {
+		return PRDetails{}, err
+	}
+
 	var comments []Comment
 	for _, c := range data.Repository.PullRequest.Comments.Nodes {
 		comments = append(comments, Comment{
@@ -182,6 +215,8 @@ func parseGraphQLPR(data *githubapi.GraphQLPRResponse) PRDetails {
 				Line:         c.Line,
 				StartLine:    c.StartLine,
 				OriginalLine: c.OriginalLine,
+				OriginalPos:  c.OriginalPosition,
+				DiffHunk:     c.DiffHunk,
 				Reactions:    convertReactions(c.Reactions.Nodes),
 			})
 		}
@@ -195,6 +230,7 @@ func parseGraphQLPR(data *githubapi.GraphQLPRResponse) PRDetails {
 			Deletions:  f.Deletions,
 		})
 	}
+
 	return PRDetails{
 		Title:      data.Repository.PullRequest.Title,
 		Body:       data.Repository.PullRequest.Body,
@@ -206,57 +242,7 @@ func parseGraphQLPR(data *githubapi.GraphQLPRResponse) PRDetails {
 		Commits:    data.Repository.PullRequest.Commits.TotalCount,
 		Comments:   comments,
 		Files:      files,
-	}
-}
-
-func convertReactions(reactions []struct {
-	Content string `json:"content"`
-	User    struct {
-		Login string `json:"login"`
-	}
-}) []Reaction {
-	var r []Reaction
-	for _, rc := range reactions {
-		r = append(r, Reaction{
-			Content: rc.Content,
-			User:    rc.User.Login,
-		})
-	}
-	return r
-}
-
-func fetchPRDetails(ctx context.Context, ghClient *githubapi.Client, prInfo GitHubPR, cacheBust bool) (PRDetails, error) {
-	cachePath := filepath.Join(".cache", fmt.Sprintf("pr%d.json", prInfo.Number))
-
-	if cacheBust {
-		log.Print("cache bust: fetching real data")
-		data, err := ghClient.GetPRDetails(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number)
-		if err != nil {
-			return PRDetails{}, err
-		}
-		prDetails := parseGraphQLPR(data)
-		os.MkdirAll(filepath.Dir(cachePath), 0755)
-		cacheData, _ := json.MarshalIndent(prDetails, "", "  ")
-		os.WriteFile(cachePath, cacheData, 0644)
-		log.Printf("cache updated: %s", cachePath)
-		return prDetails, nil
-	}
-
-	if os.Getenv("USE_CACHE") == "true" {
-		if data, err := os.ReadFile(cachePath); err == nil {
-			log.Printf("cache hit: %s", cachePath)
-			var prDetails PRDetails
-			json.Unmarshal(data, &prDetails)
-			return prDetails, nil
-		}
-	}
-
-	log.Print("cache miss: fetching real data")
-	data, err := ghClient.GetPRDetails(ctx, prInfo.Owner, prInfo.Repo, prInfo.Number)
-	if err != nil {
-		return PRDetails{}, err
-	}
-	return parseGraphQLPR(data), nil
+	}, nil
 }
 
 func filterActionableComments(comments []Comment, user string) []Comment {
@@ -279,21 +265,6 @@ func isProcessed(c Comment, userAccount string, processedThisRun map[int64]bool)
 		}
 	}
 	return false
-}
-
-func createOpencodeSession(ctx context.Context, repoPath string) (*opencode.Client, string, error) {
-	opencodeBaseURL := os.Getenv("OPENCODE_BASE_URL")
-	if opencodeBaseURL == "" {
-		opencodeBaseURL = "http://localhost:3366"
-	}
-	client := opencode.NewClient(option.WithBaseURL(opencodeBaseURL))
-	session, err := client.Session.New(ctx, opencode.SessionNewParams{
-		Directory: opencode.String(repoPath),
-	})
-	if err != nil {
-		return nil, "", err
-	}
-	return client, session.ID, nil
 }
 
 func react(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo GitHubPR) error {
@@ -411,48 +382,4 @@ func comment(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo 
 	}
 	log.Printf("comment created successfully")
 	return nil
-}
-
-func textFromRsp(rsp *opencode.SessionPromptResponse) string {
-	var textParts []string
-	for _, part := range rsp.Parts {
-		if part.Type == opencode.PartTypeText && part.Text != "" {
-			textParts = append(textParts, part.Text)
-		}
-	}
-	return strings.Join(textParts, "\n")
-}
-
-func chat(ctx context.Context, client *opencode.Client, sessionID string, text string, directory string, provider string, model string) (string, error) {
-	log.Printf("Sending message to opencode...")
-
-	var parts []opencode.SessionPromptParamsPartUnion
-	parts = append(parts, opencode.TextPartInputParam{
-		Type: opencode.F(opencode.TextPartInputType("text")),
-		Text: opencode.String(text),
-	})
-
-	rsp, err := client.Session.Prompt(
-		ctx,
-		sessionID,
-		opencode.SessionPromptParams{
-			Directory: opencode.String(directory),
-			Model: opencode.F(opencode.SessionPromptParamsModel{
-				ProviderID: opencode.String(provider),
-				ModelID:    opencode.String(model),
-			}),
-			System: opencode.String("You are helping with a GitHub pull request. Follow instructions carefully.\n\nYou have bash access. When I ask you to create Linear tickets or perform actions, EXECUTE the commands directly using bash.\n\nLinear commands:\n- dev linear create --title \"...\" --description \"$(cat <<'EOF'\nmulti-line\ncontent\nEOF\n)\"\n- dev linear get <issue-id>\n- dev linear update <issue-id> --title \"...\" --description \"$(cat <<'EOF'\ncontent\nEOF\n)\"\n\nAll dev linear commands return JSON with `id` and `url` fields. IMPORTANT: After executing a command, PARSE the JSON output and INCLUDE the URL in your reply.\n\nExample:\nUser: Create a ticket for X\nYou: [execute command, parse JSON]\nTicket created: THO-123\nhttps://linear.app/issue/THO-123\n\nUse $(cat <<'EOF'...EOF) for multi-line descriptions."),
-			Parts:  opencode.F(parts),
-		},
-	)
-	if err != nil {
-		return "", fmt.Errorf("failed to send prompt: %w", err)
-	}
-
-	replyText := textFromRsp(rsp)
-	if replyText == "" {
-		return "", fmt.Errorf("failed to parse the text response")
-	}
-
-	return replyText, nil
 }

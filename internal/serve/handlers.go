@@ -12,20 +12,20 @@ import (
 )
 
 type request struct {
-	URL       string `json:"url"`
-	CacheBust bool   `json:"cacheBust"`
+	URL string `json:"url"`
 }
 
-func handleHealth() http.Handler {
+func handleHealth(config OpenCodeConfig) http.Handler {
 	type response struct {
-		Status string `json:"status"`
+		Status       string `json:"status"`
+		OpenCodeLive bool   `json:"opencodeLive"`
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		encode(w, http.StatusOK, response{Status: "ok"})
+		encode(w, http.StatusOK, response{Status: "ok", OpenCodeLive: IsOpenCodeRunning(config.Host, config.Port)})
 	})
 }
 
-func handlerAgentDispatch(ghClient *githubapi.Client, user string, provider string, model string) http.Handler {
+func handlerAgentDispatch(ghClient *githubapi.Client, user string, opencodeConfig OpenCodeConfig) http.Handler {
 	type agentReply struct {
 		CommentID string `json:"commentId"`
 		Reply     string `json:"reply"`
@@ -62,7 +62,7 @@ func handlerAgentDispatch(ghClient *githubapi.Client, user string, provider stri
 
 		log.Printf("PR: owner=%s repo=%s number=%d", prInfo.Owner, prInfo.Repo, prInfo.Number)
 
-		prDetails, err := fetchPRDetails(r.Context(), ghClient, prInfo, req.CacheBust)
+		prDetails, err := fetchPRDetails(r.Context(), ghClient, prInfo)
 		if err != nil {
 			encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -82,7 +82,7 @@ func handlerAgentDispatch(ghClient *githubapi.Client, user string, provider stri
 			return
 		}
 
-		opencodeClient, sessionID, err := createOpencodeSession(r.Context(), repo.Path())
+		opencodeClient, sessionID, err := createOpencodeSession(r.Context(), repo.Path(), opencodeConfig)
 		if err != nil {
 			encode(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to create session: %v", err)})
 			return
@@ -113,13 +113,13 @@ func handlerAgentDispatch(ghClient *githubapi.Client, user string, provider stri
 			}
 
 			promptText := prompt(c, prDetails)
-			replyText, err := chat(r.Context(), opencodeClient, sessionID, promptText, repo.Path(), provider, model)
+			replyText, err := chat(r.Context(), opencodeClient, sessionID, promptText, repo.Path(), opencodeConfig)
 			if err != nil {
 				log.Printf("comment %d: chat failed: %v", c.ID, err)
 				continue
 			}
 
-			commitMsg, err := chat(r.Context(), opencodeClient, sessionID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), repo.Path(), provider, model)
+			commitMsg, err := chat(r.Context(), opencodeClient, sessionID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), repo.Path(), opencodeConfig)
 			if err != nil {
 				commitMsg = "auto"
 			}
