@@ -97,7 +97,14 @@ func handleAgentDispatchJob(ctx context.Context, ghClient *githubapi.Client, con
 		return fmt.Errorf("prompt job failed: %w", err)
 	}
 
-	commitMsg, err := promptJob(ctx, opencodeClient, sessionID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), systemPrompt, repoPath, config)
+	commitMsg, err := promptJob(ctx,
+		opencodeClient,
+		sessionID,
+		fmt.Sprintf("Summarize the following in less than 40 characters for the purposes of a commit message:\n\n%s", replyText),
+		systemPrompt,
+		repoPath,
+		config,
+	)
 	if err != nil {
 		commitMsg = "auto"
 	}
