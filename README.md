@@ -38,3 +38,33 @@ dev pr create -t "Work in progress" --draft
 If title or body are not provided, you will be prompted to enter them. If a PR template exists in the repository, it will be used for the body when not specified.
 
 After creating the PR, you will be asked if you want to open it in your browser.
+
+### `dev pr list`
+
+List pull requests for the repository.
+
+```bash
+dev pr list [OPTIONS]
+```
+
+**Options:**
+
+- `-s, --state <string>` - Filter by state (open, closed, all) (default: open)
+- `-l, --limit <int>` - Maximum number of PRs to show (default: 10)
+
+**Usage:**
+
+List open PRs:
+```bash
+dev pr list
+```
+
+List all PRs including closed:
+```bash
+dev pr list --state all
+```
+
+Limit to 5 PRs:
+```bash
+dev pr list --limit 5
+```
