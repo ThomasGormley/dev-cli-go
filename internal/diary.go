@@ -74,13 +74,13 @@ func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 			}
 		}
 
-		sync(c.Context, stderr)
+		syncRepo(c.Context, stderr)
 
 		return nil
 	}
 }
 
-func sync(ctx context.Context, stderr io.Writer) {
+func syncRepo(ctx context.Context, stderr io.Writer) {
 	repo := diary.NewFilesystemRepository()
 	if err := repo.Commit(); err != nil {
 		fmt.Fprintln(stderr, "Background sync error:", err)
@@ -148,7 +148,7 @@ func handleDiaryPaste(stdout, stderr io.Writer) cli.ActionFunc {
 		fmt.Fprintln(stdout, "--- Appended content ---")
 		fmt.Fprintln(stdout, clipboardContent)
 
-		sync(c.Context, stderr)
+		syncRepo(c.Context, stderr)
 		return nil
 	}
 }

@@ -4,15 +4,17 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/thomasgormley/dev-cli-go/internal/clipboard"
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/thomasgormley/dev-cli-go/internal/git"
 	"github.com/thomasgormley/dev-cli-go/internal/print"
+	"github.com/thomasgormley/dev-cli-go/internal/serve"
 	"github.com/thomasgormley/dev-cli-go/internal/spinner"
+	"github.com/thomasgormley/dev-cli-go/internal/ui"
 	"github.com/urfave/cli/v2"
 )
 
@@ -149,42 +151,17 @@ func handlePRCopy(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionF
 	}
 }
 
-func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter) cli.ActionFunc {
+func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter, serveClient serve.Client) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		if err := ensurePRContext(stdout, stderr, ghCli); err != nil {
-			return err
-		}
-
-		var prs []gh.PullRequest
-		err := spinner.With("Fetching pull requests", func() error {
-			var fetchErr error
-			prs, fetchErr = ghCli.ListPRs()
-			return fetchErr
-		}, spinner.WithWriter(stdout), spinner.WithFailureMessage("Failed to fetch pull requests"), spinner.WithSuccessMessage("Pull requests fetched"))
-		if err != nil {
+		if !git.IsRepo() {
+			print.Error(stderr, "Not a git repository")
 			return cli.Exit("", 1)
 		}
 
-		if len(prs) == 0 {
-			print.Warning(stdout, print.Wrap("No open Pull Requests in this repository"))
-			return nil
-		}
-
-		selected, action, err := promptPRList(stdout, prs)
-
+		model := ui.NewPRList(c.Context, ghCli, serveClient)
+		_, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
 		if err != nil {
-			return err
-		}
-
-		switch action {
-		case PROpen:
-			if err := openPRInBrowser(stdout, ghCli, fmt.Sprint(selected.Number)); err != nil {
-				return err
-			}
-		case PRCheckout:
-			if err := git.Checkout(selected.HeadRefName); err != nil {
-				return err
-			}
+			return cli.Exit(err.Error(), 1)
 		}
 
 		return nil
@@ -244,42 +221,6 @@ func promptForOpen(stdout io.Writer, ghCli gh.GitHubClienter) error {
 	}
 
 	return nil
-}
-
-const (
-	PROpen     = "Open"
-	PRCheckout = "Checkout"
-)
-
-func promptPRList(stdout io.Writer, prs []gh.PullRequest) (gh.PullRequest, string, error) {
-	titles := make([]string, 0)
-	for _, pr := range prs {
-		titles = append(titles, pr.Title)
-	}
-	var selectedPRTitle string
-	prompt := &survey.Select{
-		Message: "Pull Request",
-		Options: titles,
-	}
-
-	if err := survey.AskOne(prompt, &selectedPRTitle); err != nil {
-		return gh.PullRequest{}, "", err
-	}
-
-	var action string
-	actionPrompt := &survey.Select{
-		Message: "Action",
-		Options: []string{PROpen, PRCheckout},
-	}
-	if err := survey.AskOne(actionPrompt, &action); err != nil {
-		return gh.PullRequest{}, "", err
-	}
-
-	idx := slices.IndexFunc(prs, func(pr gh.PullRequest) bool {
-		return pr.Title == selectedPRTitle
-	})
-
-	return prs[idx], action, nil
 }
 
 func prTitleFromBranch(branch string) string {

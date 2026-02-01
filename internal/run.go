@@ -1,13 +1,22 @@
 package cli
 
 import (
+	"context"
 	"io"
+	"log"
+	"os"
+	"os/signal"
 
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
+	"github.com/thomasgormley/dev-cli-go/internal/serve"
 	"github.com/urfave/cli/v2"
 )
 
-// type getEnvFunc func(string) string
+const (
+	defaultPort = "1967"
+	defaultHost = "localhost"
+	baseURL     = "http://" + defaultHost + ":" + defaultPort
+)
 
 func Run(
 	args []string,
@@ -17,6 +26,20 @@ func Run(
 	exitErrorHandler cli.ExitErrHandlerFunc,
 ) error {
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, os.Interrupt)
+	go func() {
+		select {
+		case <-sigc:
+			log.Print("Cleaning up. Press Ctrl-C again to exit immediately.")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	serveClient := serve.NewClient(baseURL)
 	app := &cli.App{
 		Name:                 "dev",
 		HelpName:             "dev",
@@ -74,7 +97,7 @@ func Run(
 						Name:    "list",
 						Usage:   "List pull requests",
 						Aliases: []string{"l"},
-						Action:  handlePRList(stdout, stderr, ghClient),
+						Action:  handlePRList(stdout, stderr, ghClient, serveClient),
 					},
 				},
 			},
@@ -136,8 +159,116 @@ func Run(
 				},
 				Action: handleTest(stdout, stderr),
 			},
+			{
+				Name:        "serve",
+				Usage:       "Start the dev agent HTTP server",
+				Description: "Starts an HTTP server that processes GitHub PR comments and dispatches AI agent tasks",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "host",
+						Value: defaultHost,
+					},
+					&cli.StringFlag{
+						Name:  "port",
+						Value: defaultPort,
+					},
+					&cli.StringFlag{
+						Name:     "provider",
+						Usage:    "opencode provider ID",
+						EnvVars:  []string{"DEV_AGENT_PROVIDER"},
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "model",
+						Usage:    "opencode model ID",
+						EnvVars:  []string{"DEV_AGENT_MODEL"},
+						Required: true,
+					},
+					&cli.StringFlag{
+						Name:     "github-token",
+						Usage:    "GitHub API token",
+						EnvVars:  []string{"DEV_GITHUB_TOKEN"},
+						Required: true,
+					},
+					&cli.BoolFlag{
+						Name:  "start-opencode",
+						Usage: "start OpenCode server",
+						Value: true,
+					},
+					&cli.StringFlag{
+						Name:  "opencode-host",
+						Value: "localhost",
+						Usage: "OpenCode server host",
+					},
+					&cli.StringFlag{
+						Name:  "opencode-port",
+						Value: "3366",
+						Usage: "OpenCode server port",
+					},
+				},
+				Action: handleServe(),
+			},
+			{
+				Name:        "agent",
+				Usage:       "Dev agent operations",
+				Description: "Commands for interacting with the dev agent service",
+				Subcommands: []*cli.Command{
+					{
+						Name:        "dispatch",
+						Usage:       "Dispatch a PR URL to the agent for processing",
+						Description: "Sends a GitHub PR URL to the running dev agent server for AI processing",
+						Args:        true,
+						Action:      handleAgentDispatch(serveClient),
+					},
+				},
+			},
+			{
+				Name:        "linear",
+				Usage:       "Linear issue management",
+				Description: "Create, view, and update Linear issues",
+				Subcommands: []*cli.Command{
+					{
+						Name:  "create",
+						Usage: "Create a new Linear issue",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "title",
+								Usage:    "title of the issue",
+								Required: true,
+							},
+							&cli.StringFlag{
+								Name:  "description",
+								Usage: "description of the issue",
+							},
+						},
+						Action: handleLinearCreate(stdout, stderr),
+					},
+					{
+						Name:      "get",
+						Usage:     "Get an issue by ID",
+						ArgsUsage: "<issue-id>",
+						Action:    handleLinearGet(stdout, stderr),
+					},
+					{
+						Name:      "update",
+						Usage:     "Update an issue",
+						ArgsUsage: "<issue-id>",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:  "title",
+								Usage: "title of the issue",
+							},
+							&cli.StringFlag{
+								Name:  "description",
+								Usage: "description of the issue",
+							},
+						},
+						Action: handleLinearUpdate(stdout, stderr),
+					},
+				},
+			},
 		},
 	}
 
-	return app.Run(args)
+	return app.RunContext(ctx, args)
 }

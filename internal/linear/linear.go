@@ -90,8 +90,21 @@ type IssuePayload struct {
 }
 
 type IssueUpdateInput struct {
-	AssigneeID graphql.ID `json:"assigneeId,omitempty"`
-	StateID    graphql.ID `json:"stateId,omitempty"`
+	Title       graphql.String `json:"title,omitempty"`
+	Description graphql.String `json:"description,omitempty"`
+	AssigneeID  graphql.ID     `json:"assigneeId,omitempty"`
+	StateID     graphql.ID     `json:"stateId,omitempty"`
+}
+
+type IssueCreateInput struct {
+	Title       graphql.String `json:"title"`
+	Description graphql.String `json:"description"`
+	TeamID      graphql.ID     `json:"teamId"`
+}
+
+type IssueCreateMutation struct {
+	Issue   Issue           `graphql:"issue"`
+	Success graphql.Boolean `graphql:"success"`
 }
 
 // RPC-style method to get current user
@@ -195,4 +208,42 @@ func (c *Client) GetWorkflowStates(ctx context.Context, teamID string) ([]Workfl
 		return nil, err
 	}
 	return q.WorkflowStates.Nodes, nil
+}
+
+func (c *Client) CreateIssue(ctx context.Context, title, description, teamID string) (Issue, error) {
+	var m struct {
+		IssueCreate IssueCreateMutation `graphql:"issueCreate(input: $input)"`
+	}
+	variables := map[string]any{
+		"input": IssueCreateInput{
+			Title:       graphql.String(title),
+			Description: graphql.String(description),
+			TeamID:      graphql.ID(teamID),
+		},
+	}
+	if err := c.client.Mutate(ctx, &m, variables); err != nil {
+		return Issue{}, err
+	}
+	return m.IssueCreate.Issue, nil
+}
+
+func (c *Client) UpdateIssue(ctx context.Context, id, title, description string) (Issue, error) {
+	var m struct {
+		IssueUpdate IssuePayload `graphql:"issueUpdate(id: $id, input: $input)"`
+	}
+	input := IssueUpdateInput{}
+	if title != "" {
+		input.Title = graphql.String(title)
+	}
+	if description != "" {
+		input.Description = graphql.String(description)
+	}
+	variables := map[string]any{
+		"id":    graphql.String(id),
+		"input": input,
+	}
+	if err := c.client.Mutate(ctx, &m, variables); err != nil {
+		return Issue{}, err
+	}
+	return m.IssueUpdate.Issue, nil
 }
