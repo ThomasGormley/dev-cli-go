@@ -63,6 +63,7 @@ func handlerAgentDispatch(ghClient *githubapi.Client, user string, opencodeConfi
 
 		prDetails, err := fetchPRDetails(r.Context(), ghClient, prInfo)
 		if err != nil {
+			log.Printf("fetchPRDetails failed: %v", err)
 			encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
@@ -190,6 +191,7 @@ func handlerDebug(ghClient *githubapi.Client) http.Handler {
 
 		data, err := ghClient.GetPRDetails(r.Context(), prInfo.Owner, prInfo.Repo, prInfo.Number)
 		if err != nil {
+			log.Printf("GetPRDetails failed: %v", err)
 			encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}

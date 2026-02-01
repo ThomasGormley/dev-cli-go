@@ -128,13 +128,13 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 					totalCount
 				}
 				author { login }
-				comments(first: 10) {
+				comments(first: 100) {
 					nodes {
 						databaseId
 						body
 						author { login }
 						createdAt
-						reactions(first: 10) {
+						reactions(first: 100) {
 							nodes {
 								content
 								user { login }
@@ -142,11 +142,11 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 						}
 					}
 				}
-				reviews(first: 10) {
+				reviews(first: 100) {
 					nodes {
 						author { login }
 						body
-						comments(first: 10) {
+						comments(first: 100) {
 							nodes {
 								databaseId
 								body
@@ -160,7 +160,7 @@ func (c *Client) GetPRDetails(ctx context.Context, owner, repo string, number in
 								originalCommit { oid }
 								author { login }
 								createdAt
-								reactions(first: 10) {
+								reactions(first: 100) {
 									nodes {
 										content
 										user { login }

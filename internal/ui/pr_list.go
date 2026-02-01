@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"time"
@@ -14,18 +15,6 @@ import (
 	"github.com/thomasgormley/dev-cli-go/internal/gh"
 	"github.com/thomasgormley/dev-cli-go/internal/git"
 	"github.com/thomasgormley/dev-cli-go/internal/serve"
-)
-
-// Color palette for PR list component
-const (
-	colorNeutral    = "#e1e2e7"
-	colorPrimary    = "#2e7de9"
-	colorSuccess    = "#587539"
-	colorWarning    = "#8c6c3e"
-	colorError      = "#c94060"
-	colorDiffAdd    = "#4f8f7b"
-	colorDiffDelete = "#d05f7c"
-	colorDimmed     = "#6c7086"
 )
 
 type PRListKeyMap struct {
@@ -314,7 +303,7 @@ func (d prListDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 			d.delStyle.Render(dels)
 	}
 
-	fmt.Fprintf(w, "%s\n%s", titleStr, descStr) //nolint:errcheck
+	fmt.Fprintf(w, "%s\n%s", titleStr, descStr)
 }
 
 type authCheckMsg struct {
@@ -341,9 +330,11 @@ const (
 )
 
 type PRListModel struct {
-	KeyMap   PRListKeyMap
-	Style    PRListStyle
-	ghClient gh.GitHubClienter
+	KeyMap      PRListKeyMap
+	Style       PRListStyle
+	ghClient    gh.GitHubClienter
+	ctx         context.Context
+	serveClient serve.Client
 
 	spinner spinner.Model
 	list    list.Model
@@ -357,16 +348,18 @@ type PRListModel struct {
 	height int
 }
 
-func NewPRList(ghClient gh.GitHubClienter, serveClient serve.Client) PRListModel {
+func NewPRList(ctx context.Context, ghClient gh.GitHubClienter, serveClient serve.Client) PRListModel {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
 	return PRListModel{
-		KeyMap:   DefaultPRListKeyMap(),
-		Style:    DefaultPRListStyle(),
-		ghClient: ghClient,
-		spinner:  sp,
-		state:    stateCheckAuth,
+		KeyMap:      DefaultPRListKeyMap(),
+		Style:       DefaultPRListStyle(),
+		ghClient:    ghClient,
+		ctx:         ctx,
+		serveClient: serveClient,
+		spinner:     sp,
+		state:       stateCheckAuth,
 	}
 }
 
@@ -412,9 +405,9 @@ func checkoutCmd(branch string) tea.Cmd {
 	}
 }
 
-func dispatchCmd(client gh.GitHubClienter, number int) tea.Cmd {
+func dispatchCmd(ctx context.Context, client serve.Client, url string) tea.Cmd {
 	return func() tea.Msg {
-		err := client.ViewPR(fmt.Sprintf("%d", number))
+		_, err := client.DispatchAgent(ctx, url)
 		return actionDoneMsg{action: "dispatch", err: err}
 	}
 }
@@ -479,8 +472,9 @@ func (m PRListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 			m.action = msg.action
-			m.done = true
-			return m, tea.Quit
+			m.list.StatusMessageLifetime = 5
+			statusCmd := m.list.NewStatusMessage(m.Style.Error.Render("error: " + m.err.Error()))
+			return m, tea.Batch(statusCmd)
 		}
 		if msg.exit {
 			m.done = true
@@ -521,7 +515,7 @@ func (m PRListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case key.Matches(msg, m.KeyMap.Dispatch):
 			if item, ok := m.list.SelectedItem().(PRListItem); ok {
-				return m, dispatchCmd(m.ghClient, item.pr.Number)
+				return m, dispatchCmd(m.ctx, m.serveClient, item.pr.URL)
 			}
 		case key.Matches(msg, m.KeyMap.Quit):
 			return m, tea.Quit

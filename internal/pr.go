@@ -158,7 +158,7 @@ func handlePRList(stdout, stderr io.Writer, ghCli gh.GitHubClienter, serveClient
 			return cli.Exit("", 1)
 		}
 
-		model := ui.NewPRList(ghCli, serveClient)
+		model := ui.NewPRList(c.Context, ghCli, serveClient)
 		_, err := tea.NewProgram(model, tea.WithAltScreen()).Run()
 		if err != nil {
 			return cli.Exit(err.Error(), 1)
