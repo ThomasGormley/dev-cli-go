@@ -124,7 +124,7 @@ func (c *Client) DispatchAgent(ctx context.Context, prURL string) (*AgentRespons
 		return nil, fmt.Errorf("reading body: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return nil, fmt.Errorf("agent dispatch failed: %s", respBody)
 	}
 

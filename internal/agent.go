@@ -26,11 +26,12 @@ func handleAgentDispatch(client serve.Client) cli.ActionFunc {
 			return errors.New("url is required")
 		}
 
-		_, err := client.DispatchAgent(c.Context, urlArg)
+		result, err := client.DispatchAgent(c.Context, urlArg)
 		if err != nil {
 			return err
 		}
 
+		fmt.Fprintf(c.App.Writer, "Dispatched %d comments to agent\n", len(result.Comments))
 		return nil
 	}
 }

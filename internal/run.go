@@ -79,6 +79,11 @@ func Run(
 								Aliases: []string{"d"},
 								Value:   true,
 							},
+							&cli.BoolFlag{
+								Name:    "force",
+								Usage:   "skip prompts and use defaults",
+								Aliases: []string{"f"},
+							},
 						},
 					},
 					{

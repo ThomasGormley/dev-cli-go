@@ -315,9 +315,13 @@ func buildPRSystemPrompt(prDetails PRDetails) string {
 	return fmt.Sprintf(`Instructions:
 - You are helping with a GitHub pull request
 - Read each comment and execute the requested task
-- Commit changes with clear, concise messages
-- Reply to comments with your changes and include session metadata
-- Use bash to make changes, then commit and push
+- Respond to the user's request with your changes and findings
+- Your response will be added as a comment to the PR automatically
+
+When making changes:
+- DO NOT commit or push - this will be handled automatically
+- Always run 'go build ./...' and 'go test ./...' to verify your changes work
+- If the task is too complex or tests keep failing, stop, undo the changes, and explain what you attempted, how far you got, and what the issue was
 
 PR Details:
 - PR #%d: %s
