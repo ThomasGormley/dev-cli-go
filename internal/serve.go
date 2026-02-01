@@ -25,10 +25,7 @@ func handleServe() cli.ActionFunc {
 		opencodeHost := c.String("opencode-host")
 		opencodePort := c.String("opencode-port")
 
-		ghToken := os.Getenv("DEV_GITHUB_TOKEN")
-		if ghToken == "" {
-			return fmt.Errorf("DEV_GITHUB_TOKEN environment variable required")
-		}
+		ghToken := c.String("github-token")
 		ghClient := githubapi.NewClient(ghToken)
 		if startOpenCode {
 			config := serve.OpenCodeConfig{Host: opencodeHost, Port: opencodePort}

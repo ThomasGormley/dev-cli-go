@@ -184,6 +184,12 @@ func Run(
 						EnvVars:  []string{"DEV_AGENT_MODEL"},
 						Required: true,
 					},
+					&cli.StringFlag{
+						Name:     "github-token",
+						Usage:    "GitHub API token",
+						EnvVars:  []string{"DEV_GITHUB_TOKEN"},
+						Required: true,
+					},
 					&cli.BoolFlag{
 						Name:  "start-opencode",
 						Usage: "start OpenCode server",
