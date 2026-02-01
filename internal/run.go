@@ -212,6 +212,7 @@ func Run(
 				Name:        "agent",
 				Usage:       "Dev agent operations",
 				Description: "Commands for interacting with the dev agent service",
+				Before:      serveBeforeFunc(serveClient),
 				Subcommands: []*cli.Command{
 					{
 						Name:        "dispatch",

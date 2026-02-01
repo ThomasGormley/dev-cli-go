@@ -10,13 +10,17 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-func handleAgentDispatch(client serve.Client) cli.ActionFunc {
+func serveBeforeFunc(client serve.Client) cli.BeforeFunc {
 	return func(c *cli.Context) error {
-
 		if !client.IsServerRunning(c.Context) {
 			return errors.New("dev-cli server not running start with: dev serve")
 		}
+		return nil
+	}
+}
 
+func handleAgentDispatch(client serve.Client) cli.ActionFunc {
+	return func(c *cli.Context) error {
 		urlArg := c.Args().First()
 		if urlArg == "" {
 			return errors.New("url is required")
@@ -33,10 +37,6 @@ func handleAgentDispatch(client serve.Client) cli.ActionFunc {
 
 func handleAgentAttach(client serve.Client) cli.ActionFunc {
 	return func(c *cli.Context) error {
-		if !client.IsServerRunning(c.Context) {
-			return errors.New("dev-cli server not running start with: dev serve")
-		}
-
 		urlArg := c.String("url")
 		opencodeURL := urlArg
 
