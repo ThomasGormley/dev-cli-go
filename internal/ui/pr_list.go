@@ -83,45 +83,118 @@ type PRListStyle struct {
 }
 
 type palette struct {
+	// Core theme colors
 	neutral, primary, success, warning, errorColor lipgloss.Color
 	diffAdd, diffDelete, dimmed                    lipgloss.Color
+	// Text colors
+	textBase, textWeak, textStrong lipgloss.Color
 }
 
 func DefaultPRListStyle() PRListStyle {
+	// Tokyo Night Dark theme colors - all in one place
 	c := palette{
-		neutral:    lipgloss.Color("#e1e2e7"),
-		primary:    lipgloss.Color("#2e7de9"),
-		success:    lipgloss.Color("#587539"),
-		warning:    lipgloss.Color("#8c6c3e"),
-		errorColor: lipgloss.Color("#c94060"),
-		diffAdd:    lipgloss.Color("#4f8f7b"),
-		diffDelete: lipgloss.Color("#d05f7c"),
-		dimmed:     lipgloss.Color("#6c7086"),
+		neutral:    lipgloss.Color("#1a1b26"),
+		primary:    lipgloss.Color("#7aa2f7"),
+		success:    lipgloss.Color("#9ece6a"),
+		warning:    lipgloss.Color("#e0af68"),
+		errorColor: lipgloss.Color("#f7768e"),
+		diffAdd:    lipgloss.Color("#41a6b5"),
+		diffDelete: lipgloss.Color("#c34043"),
+		dimmed:     lipgloss.Color("#565f89"),
+		textBase:   lipgloss.Color("#c0caf5"),
+		textWeak:   lipgloss.Color("#7a88cf"),
+		textStrong: lipgloss.Color("#eaeaff"),
 	}
 
 	listStyles := list.DefaultStyles()
-	listStyles.Title = lipgloss.NewStyle().
-		Background(c.primary).Foreground(c.neutral).Padding(0, 1)
-	listStyles.StatusBar = lipgloss.NewStyle().
-		Foreground(c.warning).Padding(0, 0, 1, 2)
-	listStyles.StatusEmpty = lipgloss.NewStyle().Foreground(c.warning)
-	listStyles.StatusBarActiveFilter = lipgloss.NewStyle().Foreground(c.neutral)
 
+	// Title bar styling
+	listStyles.TitleBar = lipgloss.NewStyle().Padding(0, 0, 1, 2)
+	listStyles.Title = lipgloss.NewStyle().
+		Background(c.primary).
+		Foreground(c.neutral).
+		Padding(0, 1)
+
+	// Filter styling
+	listStyles.FilterPrompt = lipgloss.NewStyle().
+		Foreground(c.primary)
+	listStyles.FilterCursor = lipgloss.NewStyle().
+		Foreground(c.primary)
+	listStyles.DefaultFilterCharacterMatch = lipgloss.NewStyle().
+		Foreground(c.primary).
+		Underline(true)
+
+	// Status bar styling
+	listStyles.StatusBar = lipgloss.NewStyle().
+		Foreground(c.textWeak).
+		Padding(0, 0, 1, 2)
+	listStyles.StatusEmpty = lipgloss.NewStyle().
+		Foreground(c.warning)
+	listStyles.StatusBarActiveFilter = lipgloss.NewStyle().
+		Foreground(c.primary)
+	listStyles.StatusBarFilterCount = lipgloss.NewStyle().
+		Foreground(c.dimmed)
+
+	// Spinner styling
+	listStyles.Spinner = lipgloss.NewStyle().
+		Foreground(c.primary)
+
+	// Empty state styling
+	listStyles.NoItems = lipgloss.NewStyle().
+		Foreground(c.textWeak)
+
+	// Pagination styling
+	listStyles.PaginationStyle = lipgloss.NewStyle().PaddingLeft(2)
+	listStyles.ActivePaginationDot = lipgloss.NewStyle().
+		Foreground(c.primary).
+		SetString("•")
+	listStyles.InactivePaginationDot = lipgloss.NewStyle().
+		Foreground(c.dimmed).
+		SetString("•")
+	listStyles.ArabicPagination = lipgloss.NewStyle().
+		Foreground(c.dimmed)
+	listStyles.DividerDot = lipgloss.NewStyle().
+		Foreground(c.dimmed).
+		SetString(" • ")
+
+	// Help styling
+	listStyles.HelpStyle = lipgloss.NewStyle().Padding(1, 0, 0, 2)
+
+	// Item styles - using proper inheritance pattern like bubbles defaults
 	itemStyles := list.NewDefaultItemStyles()
-	itemStyles.NormalTitle = itemStyles.NormalTitle.Foreground(c.neutral)
-	itemStyles.NormalDesc = itemStyles.NormalDesc.Foreground(c.warning)
-	itemStyles.SelectedTitle = itemStyles.SelectedTitle.
-		Foreground(c.primary).BorderForeground(c.primary)
-	itemStyles.SelectedDesc = itemStyles.SelectedTitle.Foreground(c.neutral)
-	itemStyles.DimmedTitle = itemStyles.DimmedTitle.Foreground(c.dimmed)
-	itemStyles.DimmedDesc = itemStyles.DimmedDesc.Foreground(c.dimmed)
+
+	// Normal state
+	itemStyles.NormalTitle = lipgloss.NewStyle().
+		Foreground(c.textBase).
+		Padding(0, 0, 0, 2)
+	itemStyles.NormalDesc = itemStyles.NormalTitle.Copy().
+		Foreground(c.textStrong)
+
+	// Selected state with left border
+	itemStyles.SelectedTitle = lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(c.primary).
+		Foreground(c.primary).
+		Padding(0, 0, 0, 1)
+	itemStyles.SelectedDesc = itemStyles.SelectedTitle.Copy()
+
+	// Dimmed state (when filtering)
+	itemStyles.DimmedTitle = lipgloss.NewStyle().
+		Foreground(c.textWeak).
+		Padding(0, 0, 0, 2)
+	itemStyles.DimmedDesc = itemStyles.DimmedTitle.Copy().
+		Foreground(c.dimmed)
+
+	// Filter match styling
+	itemStyles.FilterMatch = lipgloss.NewStyle().
+		Underline(true)
 
 	return PRListStyle{
 		Title:               lipgloss.NewStyle().Bold(true),
 		Selected:            lipgloss.NewStyle().Foreground(c.primary),
-		Description:         lipgloss.NewStyle().Foreground(c.neutral),
+		Description:         lipgloss.NewStyle().Foreground(c.textStrong),
 		Spinner:             lipgloss.NewStyle().Foreground(c.primary),
-		Empty:               lipgloss.NewStyle().Foreground(c.neutral).Italic(true),
+		Empty:               lipgloss.NewStyle().Foreground(c.textWeak).Italic(true),
 		Success:             lipgloss.NewStyle().Foreground(c.success),
 		Error:               lipgloss.NewStyle().Foreground(c.errorColor),
 		ListItemAddStyle:    lipgloss.NewStyle().Foreground(c.diffAdd),
@@ -168,7 +241,7 @@ func newPRListDelegate(style PRListStyle) prListDelegate {
 		addStyle: style.ListItemAddStyle,
 		delStyle: style.ListItemDeleteStyle,
 		height:   2,
-		spacing:  0,
+		spacing:  1,
 	}
 }
 
@@ -388,6 +461,8 @@ func (m PRListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list = list.New(items, delegate, m.width, m.height)
 		m.list.Title = "Pull Requests"
 		m.list.Styles = m.Style.ListStyles
+		m.list.FilterInput.PromptStyle = m.Style.ListStyles.FilterPrompt
+		m.list.FilterInput.Cursor.Style = m.Style.ListStyles.FilterCursor
 		m.list.SetShowHelp(true)
 		m.list.StatusMessageLifetime = 3 * time.Second
 		m.list.AdditionalShortHelpKeys = func() []key.Binding {
