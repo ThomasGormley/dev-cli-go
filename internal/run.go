@@ -160,8 +160,9 @@ func Run(
 				Action: handleTest(stdout, stderr),
 			},
 			{
-				Name:  "serve",
-				Usage: "dev server",
+				Name:        "serve",
+				Usage:       "Start the dev agent HTTP server",
+				Description: "Starts an HTTP server that processes GitHub PR comments and dispatches AI agent tasks",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:  "host",
@@ -202,19 +203,23 @@ func Run(
 				Action: handleServe(),
 			},
 			{
-				Name:  "agent",
-				Usage: "dev agent things",
+				Name:        "agent",
+				Usage:       "Dev agent operations",
+				Description: "Commands for interacting with the dev agent service",
 				Subcommands: []*cli.Command{
 					{
-						Name:   "dispatch",
-						Action: handleAgentDispatch(serveClient),
-						Args:   true,
+						Name:        "dispatch",
+						Usage:       "Dispatch a PR URL to the agent for processing",
+						Description: "Sends a GitHub PR URL to the running dev agent server for AI processing",
+						Args:        true,
+						Action:      handleAgentDispatch(serveClient),
 					},
 				},
 			},
 			{
-				Name:  "linear",
-				Usage: "Linear issue management",
+				Name:        "linear",
+				Usage:       "Linear issue management",
+				Description: "Create, view, and update Linear issues",
 				Subcommands: []*cli.Command{
 					{
 						Name:  "create",
