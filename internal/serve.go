@@ -44,7 +44,7 @@ func handleServe() cli.ActionFunc {
 
 		srv := &http.Server{
 			Addr: net.JoinHostPort(host, port),
-			Handler: serve.Handle(serve.HandleOpts{
+			Handler: serve.Handle(c.Context, serve.HandleOpts{
 				GitHubUser:     os.Getenv("DEV_GITHUB_USER"),
 				GitHubClient:   ghClient,
 				AllowedOrigins: []string{"http://" + host, "https://" + host},

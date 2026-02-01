@@ -81,16 +81,18 @@ func StartOpenCode(ctx context.Context, config OpenCodeConfig, timeout time.Dura
 	return true, closer, nil
 }
 
-func createOpencodeSession(ctx context.Context, repoPath string, config OpenCodeConfig) (*opencode.Client, string, error) {
+func createOpencodeSession(ctx context.Context, repoPath string, config OpenCodeConfig) (string, error) {
 	openCodeURL := fmt.Sprintf("http://%s:%s", config.Host, config.Port)
 	client := opencode.NewClient(option.WithBaseURL(openCodeURL))
+
 	session, err := client.Session.New(ctx, opencode.SessionNewParams{
 		Directory: opencode.String(repoPath),
 	})
 	if err != nil {
-		return nil, "", err
+		return "", fmt.Errorf("create session: %w", err)
 	}
-	return client, session.ID, nil
+
+	return session.ID, nil
 }
 
 func textFromRsp(rsp *opencode.SessionPromptResponse) string {
@@ -103,33 +105,74 @@ func textFromRsp(rsp *opencode.SessionPromptResponse) string {
 	return strings.Join(textParts, "\n")
 }
 
-func chat(ctx context.Context, client *opencode.Client, sessionID string, text string, directory string, config OpenCodeConfig) (string, error) {
+func buildPRSystemPrompt(prInfo GitHubPR, prDetails PRDetails) string {
+	var parts []string
+
+	parts = append(parts, "Instructions:")
+	parts = append(parts, "- You are helping with a GitHub pull request")
+	parts = append(parts, "- Read each comment and execute the requested task")
+	parts = append(parts, "- Commit changes with clear, concise messages")
+	parts = append(parts, "- Reply to comments with your changes and include session metadata")
+	parts = append(parts, "- Use bash to make changes, then commit and push")
+	parts = append(parts, "")
+
+	parts = append(parts, "PR Details:")
+	parts = append(parts, fmt.Sprintf("- PR #%d: %s", prDetails.Number, prDetails.Title))
+	parts = append(parts, fmt.Sprintf("- Author: %s", prDetails.Author))
+	parts = append(parts, fmt.Sprintf("- Base: %s <- Head: %s", prDetails.BaseBranch, prDetails.HeadBranch))
+	if prDetails.Body != "" {
+		parts = append(parts, fmt.Sprintf("- Description: %s", prDetails.Body))
+	}
+	parts = append(parts, fmt.Sprintf("- Changes: +%d/-%d", prDetails.Additions, prDetails.Deletions))
+	parts = append(parts, "")
+
+	if len(prDetails.Files) > 0 {
+		parts = append(parts, "Changed Files:")
+		for _, f := range prDetails.Files {
+			parts = append(parts, fmt.Sprintf("- %s (%s) +%d/-%d", f.Path, f.ChangeType, f.Additions, f.Deletions))
+		}
+		parts = append(parts, "")
+	}
+
+	parts = append(parts, "Previous Comments:")
+	for _, c := range prDetails.Comments {
+		var location string
+		if c.IsReviewComment() {
+			location = fmt.Sprintf(" (%s:%d)", c.FilePath, c.Line)
+		}
+		parts = append(parts, fmt.Sprintf("- %s at %s%s: %s", c.Author, c.CreatedAt, location, c.Body))
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+func promptJob(ctx context.Context, client *opencode.Client, sessionID string, taskText string, systemPrompt string, repoPath string, config OpenCodeConfig) (string, error) {
 	var parts []opencode.SessionPromptParamsPartUnion
 	parts = append(parts, opencode.TextPartInputParam{
 		Type: opencode.F(opencode.TextPartInputType("text")),
-		Text: opencode.String(text),
+		Text: opencode.String(taskText),
 	})
 
 	rsp, err := client.Session.Prompt(
 		ctx,
 		sessionID,
 		opencode.SessionPromptParams{
-			Directory: opencode.String(directory),
+			Directory: opencode.String(repoPath),
 			Model: opencode.F(opencode.SessionPromptParamsModel{
 				ProviderID: opencode.String(config.Provider),
 				ModelID:    opencode.String(config.Model),
 			}),
-			System: opencode.String("You are helping with a GitHub pull request. Follow instructions carefully.\n\nYou have bash access. When I ask you to create Linear tickets or perform actions, EXECUTE the commands directly using bash.\n\nLinear commands:\n- dev linear create --title \"...\" --description \"$(cat <<'EOF'\nmulti-line\ncontent\nEOF\n)\"\n- dev linear get <issue-id>\n- dev linear update <issue-id> --title \"...\" --description \"$(cat <<'EOF'\ncontent\nEOF\n)\"\n\nAll dev linear commands return JSON with `id` and `url` fields. IMPORTANT: After executing a command, PARSE the JSON output and INCLUDE the URL in your reply.\n\nExample:\nUser: Create a ticket for X\nYou: [execute command, parse JSON]\nTicket created: THO-123\nhttps://linear.app/issue/THO-123\n\nUse $(cat <<'EOF'...EOF) for multi-line descriptions."),
+			System: opencode.String(systemPrompt),
 			Parts:  opencode.F(parts),
 		},
 	)
 	if err != nil {
-		return "", fmt.Errorf("failed to send prompt: %w", err)
+		return "", fmt.Errorf("failed to prompt job: %w", err)
 	}
 
 	replyText := textFromRsp(rsp)
 	if replyText == "" {
-		return "", fmt.Errorf("failed to parse the text response")
+		return "", fmt.Errorf("failed to parse response")
 	}
 
 	return replyText, nil

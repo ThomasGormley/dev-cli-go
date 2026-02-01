@@ -11,8 +11,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sst/opencode-sdk-go"
+	"github.com/sst/opencode-sdk-go/option"
+
 	"github.com/thomasgormley/dev-cli-go/internal/git"
 	"github.com/thomasgormley/dev-cli-go/internal/githubapi"
+	"github.com/thomasgormley/dev-cli-go/internal/queuelib"
 )
 
 type HandleOpts struct {
@@ -29,17 +33,97 @@ type OpenCodeConfig struct {
 	Port     string
 }
 
-func Handle(opt HandleOpts) http.Handler {
+type agentDispatchJob struct {
+	prInfo     GitHubPR
+	prDetails  PRDetails
+	headBranch string
+	comment    Comment
+	repoPath   string
+	sessionID  string
+	user       string
+}
+
+func Handle(ctx context.Context, opt HandleOpts) http.Handler {
+
+	q := queuelib.New[agentDispatchJob]()
 	mux := http.NewServeMux()
 	mux.Handle("/api/health", handleHealth(opt.OpenCode))
 	mux.Handle("/api/debug", handlerDebug(opt.GitHubClient))
-	mux.Handle("/api/agent/dispatch", opencodeCheckMiddleware(opt.OpenCode, handlerAgentDispatch(opt.GitHubClient, opt.GitHubUser, opt.OpenCode)))
+	mux.Handle(
+		"/api/agent/dispatch",
+		opencodeCheckMiddleware(opt.OpenCode,
+			handlerAgentDispatch(q, opt.GitHubClient, opt.GitHubUser, opt.OpenCode),
+		),
+	)
 
 	var handler http.Handler = mux
 	handler = corsMiddleware(handler, opt.AllowedOrigins)
 	handler = loggingMiddleware(handler)
 
+	go func() {
+		for {
+			job, ok := q.Dequeue(ctx)
+			if !ok {
+				return
+			}
+			if err := handleAgentDispatchJob(ctx, opt.GitHubClient, opt.OpenCode, job); err != nil {
+				log.Printf("job failed for comment %d: %v", job.comment.ID, err)
+			}
+		}
+	}()
+
 	return handler
+}
+
+func handleAgentDispatchJob(ctx context.Context, ghClient *githubapi.Client, config OpenCodeConfig, job agentDispatchJob) error {
+	prInfo := job.prInfo
+	prDetails := job.prDetails
+	c := job.comment
+	repoPath := job.repoPath
+	sessionID := job.sessionID
+	branch := job.headBranch
+
+	if err := react(ctx, ghClient, c, prInfo); err != nil {
+		return fmt.Errorf("reaction failed: %w", err)
+	}
+
+	opencodeClient := opencode.NewClient(option.WithBaseURL(fmt.Sprintf("http://%s:%s", config.Host, config.Port)))
+
+	systemPrompt := buildPRSystemPrompt(prInfo, prDetails)
+
+	promptText := prompt(c)
+	replyText, err := promptJob(ctx, opencodeClient, sessionID, promptText, systemPrompt, repoPath, config)
+	if err != nil {
+		return fmt.Errorf("prompt job failed: %w", err)
+	}
+
+	commitMsg, err := promptJob(ctx, opencodeClient, sessionID, fmt.Sprintf("Summarize the following in less than 40 characters:\n\n%s", replyText), systemPrompt, repoPath, config)
+	if err != nil {
+		commitMsg = "auto"
+	}
+
+	repo := git.Open(repoPath)
+	if err := commit(repo, branch, commitMsg); err != nil {
+		return fmt.Errorf("commit failed: %w", err)
+	}
+
+	if err := repo.SyncToRemote(branch); err != nil {
+		return fmt.Errorf("sync failed: %w", err)
+	}
+
+	var commentURL string
+	if c.IsReviewComment() {
+		commentURL = fmt.Sprintf("https://github.com/%s/%s/pull/%d#discussion_r%d", prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID)
+	} else {
+		commentURL = fmt.Sprintf("https://github.com/%s/%s/pull/%d#issuecomment-%d", prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID)
+	}
+	metadata := fmt.Sprintf("<details><summary>👉 info</summary>\n\n| Key | Value |\n|-----|-------|\n| In reply to | [#%d](%s) |\n| Session | `%s` |\n\n</details>", c.ID, commentURL, sessionID)
+	if err := comment(ctx, ghClient, c, prInfo, replyText+"\n\n"+metadata); err != nil {
+		return fmt.Errorf("comment failed: %w", err)
+	}
+
+	log.Printf("comment %d processed successfully", c.ID)
+	return nil
 }
 
 func corsMiddleware(h http.Handler, allowedOrigins []string) http.Handler {
@@ -262,19 +346,25 @@ func fetchPRDetails(ctx context.Context, ghClient *githubapi.Client, prInfo GitH
 func filterActionableComments(comments []Comment, user string) []Comment {
 	var actionable []Comment
 	for _, c := range comments {
-		if c.Author == user && strings.Contains(c.Body, "@"+user) {
-			actionable = append(actionable, c)
+		if c.Author != user {
+			continue
 		}
+		if !strings.Contains(c.Body, "@"+user) {
+			continue
+		}
+
+		if hasEyesReaction(c.Reactions, user) {
+			continue
+		}
+
+		actionable = append(actionable, c)
 	}
 	return actionable
 }
 
-func isProcessed(c Comment, userAccount string, processedThisRun map[int64]bool) bool {
-	if processedThisRun[c.ID] {
-		return true
-	}
-	for _, r := range c.Reactions {
-		if strings.ToUpper(r.Content) == "EYES" && r.User == userAccount {
+func hasEyesReaction(reactions []Reaction, user string) bool {
+	for _, r := range reactions {
+		if strings.ToUpper(r.Content) == "EYES" && r.User == user {
 			return true
 		}
 	}
@@ -299,14 +389,11 @@ func react(ctx context.Context, ghClient *githubapi.Client, c Comment, prInfo Gi
 	return nil
 }
 
-func prompt(c Comment, prDetails PRDetails) string {
+func prompt(c Comment) string {
 	body := strings.TrimSpace(strings.TrimPrefix(c.Body, "@"+c.Author))
 
-	prContext := prContext(prDetails, c.ID)
-	prFiles := prFiles(prDetails)
-
 	if !c.IsReviewComment() {
-		return fmt.Sprintf("%s\n\n%s\n\n%s", body, prContext, prFiles)
+		return body
 	}
 
 	commentContext := fmt.Sprintf("You are reviewing a comment on file \"%s\" at line %d.", c.FilePath, c.Line)
@@ -314,45 +401,7 @@ func prompt(c Comment, prDetails PRDetails) string {
 		commentContext = fmt.Sprintf("You are reviewing a comment on file \"%s\" at line %d.\n\nDiff context:\n%s", c.FilePath, c.Line, c.DiffHunk)
 	}
 
-	return fmt.Sprintf("%s\n\n%s\n\n%s\n\n%s", commentContext, body, prContext, prFiles)
-}
-
-func prFiles(prDetails PRDetails) string {
-	if len(prDetails.Files) == 0 {
-		return ""
-	}
-	var parts []string
-	parts = append(parts, "== Changed Files ==")
-	for _, f := range prDetails.Files {
-		parts = append(parts, fmt.Sprintf("- %s (%s) +%d/-%d", f.Path, f.ChangeType, f.Additions, f.Deletions))
-	}
-	return strings.Join(parts, "\n")
-}
-
-func prContext(prDetails PRDetails, currentCommentID int64) string {
-	var parts []string
-
-	parts = append(parts, "== Previous discussion context ==")
-
-	var prevComments []string
-	for _, cm := range prDetails.Comments {
-		if cm.ID == currentCommentID {
-			continue
-		}
-		var location string
-		if cm.IsReviewComment() {
-			location = fmt.Sprintf(" (%s:%d)", cm.FilePath, cm.Line)
-		}
-		prevComments = append(prevComments, fmt.Sprintf("- %s at %s%s: %s", cm.Author, cm.CreatedAt, location, cm.Body))
-	}
-
-	if len(prevComments) > 0 {
-		parts = append(parts, "<previous_comments>")
-		parts = append(parts, prevComments...)
-		parts = append(parts, "</previous_comments>")
-	}
-
-	return strings.Join(parts, "\n")
+	return fmt.Sprintf("%s\n\n%s", commentContext, body)
 }
 
 func commit(repo git.Repo, branch string, commitMessage string) error {
