@@ -515,7 +515,11 @@ func (m PRListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case key.Matches(msg, m.KeyMap.Dispatch):
 			if item, ok := m.list.SelectedItem().(PRListItem); ok {
-				return m, dispatchCmd(m.ctx, m.serveClient, item.pr.URL)
+				statusCmd := m.list.
+					NewStatusMessage(
+						m.Style.Title.Render(fmt.Sprintf("Dispatched Agent to: '%s' (#%d)", item.pr.Title, item.pr.Number)),
+					)
+				return m, tea.Batch(dispatchCmd(m.ctx, m.serveClient, item.pr.URL), statusCmd)
 			}
 		case key.Matches(msg, m.KeyMap.Quit):
 			return m, tea.Quit

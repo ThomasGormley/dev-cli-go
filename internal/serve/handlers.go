@@ -140,7 +140,7 @@ func handlerAgentDispatch(ghClient *githubapi.Client, user string, opencodeConfi
 			} else {
 				commentURL = fmt.Sprintf("https://github.com/%s/%s/pull/%d#issuecomment-%d", prInfo.Owner, prInfo.Repo, prInfo.Number, c.ID)
 			}
-			metadata := fmt.Sprintf("<details><summary>👉 metadata</summary>\n\n| Key | Value |\n|-----|-------|\n| In reply to | [#%d](%s) |\n| Session | `%s` |\n\n</details>", c.ID, commentURL, sessionID)
+			metadata := fmt.Sprintf("<details><summary>👉 info</summary>\n\n| Key | Value |\n|-----|-------|\n| In reply to | [#%d](%s) |\n| Session | `%s` |\n\n</details>", c.ID, commentURL, sessionID)
 			if err := comment(r.Context(), ghClient, c, prInfo, replyText+"\n\n"+metadata); err != nil {
 				log.Printf("comment %d: comment failed: %v", c.ID, err)
 				continue
