@@ -59,6 +59,7 @@ func (r Repo) Fetch() error {
 
 func (r Repo) FetchBranch(branch string) error {
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+	// refspec needed for shallow clone to fetch only the specific branch
 	return runGit(r.path, "fetch", "origin", "--depth", "1", refspec)
 }
 
