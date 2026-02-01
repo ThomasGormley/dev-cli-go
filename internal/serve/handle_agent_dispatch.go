@@ -124,6 +124,11 @@ func runAgentDispatchJob(ctx context.Context, ghClient githubapi.Client, opencod
 		c         = job.comment
 	)
 
+	repo := git.Open(repoPath)
+	if err := repo.SyncFromRemote(branch); err != nil {
+		return fmt.Errorf("syncing: %w", err)
+	}
+
 	if err := react(ctx, ghClient, c, prInfo); err != nil {
 		return fmt.Errorf("reacting: %w", err)
 	}
@@ -135,25 +140,28 @@ func runAgentDispatchJob(ctx context.Context, ghClient githubapi.Client, opencod
 		return fmt.Errorf("prompting job: %w", err)
 	}
 
-	commitMsg, err := chat(ctx,
-		opencodeClient,
-		sessionID,
-		fmt.Sprintf("Summarize the following in less than 40 characters for the purposes of a commit message:\n\n%s", replyText),
-		systemPrompt,
-		repoPath,
-		config,
-	)
+	status, err := repo.Status()
 	if err != nil {
-		commitMsg = "auto"
+		return fmt.Errorf("getting status: %w", err)
 	}
 
-	repo := git.Open(repoPath)
-	if err := commit(repo, branch, commitMsg); err != nil {
-		return fmt.Errorf("committing: %w", err)
-	}
+	log.Printf("branch dirty, pushing changes:\n%s", status)
+	if len(status) > 0 {
+		commitMsg, err := chat(ctx,
+			opencodeClient,
+			sessionID,
+			fmt.Sprintf("Summarize the following in less than 40 characters for the purposes of a commit message:\n\n%s", replyText),
+			systemPrompt,
+			repoPath,
+			config,
+		)
+		if err != nil {
+			commitMsg = "auto"
+		}
 
-	if err := repo.SyncToRemote(branch); err != nil {
-		return fmt.Errorf("syncing: %w", err)
+		if err := commit(repo, branch, commitMsg); err != nil {
+			return fmt.Errorf("committing: %w", err)
+		}
 	}
 
 	var commentURL string
@@ -187,16 +195,6 @@ func prompt(c Comment) string {
 }
 
 func commit(repo git.Repo, branch string, commitMessage string) error {
-	status, err := repo.Status()
-	if err != nil {
-		return err
-	}
-
-	log.Printf("git status output: %s", status)
-	if len(status) == 0 {
-		return nil
-	}
-
 	log.Printf("branch dirty, pushing changes")
 
 	if err := repo.Add("."); err != nil {

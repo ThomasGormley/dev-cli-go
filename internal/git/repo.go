@@ -75,7 +75,7 @@ func (r Repo) ResetHard(ref string) error {
 	return runGit(r.path, "reset", "--hard", ref)
 }
 
-func (r Repo) SyncToRemote(branch string) error {
+func (r Repo) SyncFromRemote(branch string) error {
 	if err := r.FetchBranch(branch); err != nil {
 		return err
 	}
