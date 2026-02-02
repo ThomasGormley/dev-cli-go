@@ -18,10 +18,10 @@ func EnsureClone(ctx context.Context, owner, repo, branch string) (Repo, error) 
 	if _, err := os.Stat(repoPath); err == nil {
 		r := Repo{path: repoPath}
 		if err := r.FetchBranch(branch); err != nil {
-			return Repo{}, err
+			return Repo{}, fmt.Errorf("fetcing branch: %w", err)
 		}
 		if err := r.CheckoutForce(branch); err != nil {
-			return Repo{}, err
+			return Repo{}, fmt.Errorf("checking out branch: %w", err)
 		}
 		return r, nil
 	}
@@ -29,7 +29,7 @@ func EnsureClone(ctx context.Context, owner, repo, branch string) (Repo, error) 
 	cloneURL := fmt.Sprintf("git@github.com:%s/%s.git", owner, repo)
 	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "-b", branch, cloneURL, repoPath)
 	if err := cmd.Run(); err != nil {
-		return Repo{}, err
+		return Repo{}, fmt.Errorf("cloning branch: %w", err)
 	}
 	return Repo{path: repoPath}, nil
 }

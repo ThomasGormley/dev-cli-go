@@ -28,7 +28,7 @@ func handleAgentDispatch(client serve.Client) cli.ActionFunc {
 
 		result, err := client.DispatchAgent(c.Context, urlArg)
 		if err != nil {
-			return err
+			return fmt.Errorf("dispatching agent: %w", err)
 		}
 
 		fmt.Fprintf(c.App.Writer, "Dispatched %d comments to agent\n", len(result.Comments))

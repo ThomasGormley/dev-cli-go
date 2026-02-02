@@ -43,7 +43,7 @@ func handlerAgentDispatch(queue queuelib.Queue[agentDispatchJob], ghClient githu
 
 		prInfo, err := parseGitHubPRURL(req.URL)
 		if err != nil {
-			encode(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			encode(w, http.StatusBadRequest, map[string]string{"error": "parsing github url: " + err.Error()})
 			return
 		}
 
@@ -51,7 +51,7 @@ func handlerAgentDispatch(queue queuelib.Queue[agentDispatchJob], ghClient githu
 
 		prDetails, err := fetchPRDetails(r.Context(), ghClient, prInfo)
 		if err != nil {
-			encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			encode(w, http.StatusInternalServerError, map[string]string{"error": "fetching pr details: " + err.Error()})
 			return
 		}
 
@@ -65,7 +65,7 @@ func handlerAgentDispatch(queue queuelib.Queue[agentDispatchJob], ghClient githu
 		branch := prDetails.HeadBranch
 		repo, err := git.EnsureClone(r.Context(), prInfo.Owner, prInfo.Repo, branch)
 		if err != nil {
-			encode(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			encode(w, http.StatusInternalServerError, map[string]string{"error": "ensuring clone: " + err.Error()})
 			return
 		}
 
