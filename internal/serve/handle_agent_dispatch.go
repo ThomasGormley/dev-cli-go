@@ -318,7 +318,8 @@ func buildPRSystemPrompt(prDetails PRDetails) string {
 
 When making changes:
 - DO NOT commit or push - this will be handled automatically
-- Always run 'go build ./...' and 'go test ./...' to verify your changes work
+- Always run 'go build ./...' and 'go test ./...' for the relevant directories to verify your changes work
+   - e.g., changes to service.foo should run 'go test ./service.foo/...
 - If the task is too complex or tests keep failing, stop, undo the changes, and explain what you attempted, how far you got, and what the issue was
 
 PR Details:

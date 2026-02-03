@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,7 @@ func EnsureClone(ctx context.Context, owner, repo, branch string) (Repo, error) 
 	}
 	os.MkdirAll(filepath.Dir(repoPath), 0755)
 	cloneURL := fmt.Sprintf("git@github.com:%s/%s.git", owner, repo)
+	log.Printf("cloning repository: %s/%s", cloneURL, branch)
 	cmd := exec.CommandContext(ctx, "git", "clone", "--depth", "1", "-b", branch, cloneURL, repoPath)
 	if err := cmd.Run(); err != nil {
 		return Repo{}, fmt.Errorf("cloning branch: %w", err)
