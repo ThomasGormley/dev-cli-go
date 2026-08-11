@@ -16,21 +16,28 @@ import (
 )
 
 type fakeLinearClient struct {
-	createInput linear.IssueCreateInput
-	getID       string
-	updateID    string
-	updateInput linear.UpdateIssueRequest
-	issue       linear.Issue
-	err         error
-	createCalls int
-	updateCalls int
-	teams       []linear.Team
-	teamPage    linear.TeamPage
-	resolveTeam linear.Team
-	resolveErr  error
-	listErr     error
-	resolveTerm string
-	listRequest linear.TeamListRequest
+	createInput        linear.IssueCreateInput
+	getID              string
+	updateID           string
+	updateInput        linear.UpdateIssueRequest
+	issue              linear.Issue
+	err                error
+	createCalls        int
+	updateCalls        int
+	teams              []linear.Team
+	teamPage           linear.TeamPage
+	resolveTeam        linear.Team
+	resolveErr         error
+	listErr            error
+	resolveTerm        string
+	listRequest        linear.TeamListRequest
+	projects           linear.ProjectPage
+	projectErr         error
+	projectTerm        string
+	projectTeam        string
+	projectPageRequest linear.ProjectListRequest
+	resolveProject     linear.Project
+	resolveProjectErr  error
 }
 
 func (f *fakeLinearClient) CreateIssue(_ context.Context, input linear.IssueCreateInput) (linear.Issue, error) {
@@ -69,6 +76,28 @@ func (f *fakeLinearClient) ResolveTeam(_ context.Context, selector string) (line
 		return linear.Team{}, f.resolveErr
 	}
 	return f.resolveTeam, nil
+}
+
+func (f *fakeLinearClient) ListProjects(
+	_ context.Context,
+	teamID string,
+	request linear.ProjectListRequest,
+) (linear.ProjectPage, error) {
+	f.projectTeam = teamID
+	f.projectPageRequest = request
+	if f.projectErr != nil {
+		return linear.ProjectPage{}, f.projectErr
+	}
+	return f.projects, nil
+}
+
+func (f *fakeLinearClient) ResolveProject(_ context.Context, teamID string, selector string) (linear.Project, error) {
+	f.projectTeam = teamID
+	f.projectTerm = selector
+	if f.resolveProjectErr != nil {
+		return linear.Project{}, f.resolveProjectErr
+	}
+	return f.resolveProject, nil
 }
 
 func newLinearIssue() linear.Issue {
@@ -276,6 +305,48 @@ func TestHandleLinearCreateResolvesTeamFlagBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestHandleLinearCreateResolvesProjectBeforeMutation(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	project := linear.Project{ID: "project-uuid", Name: "Agent work", SlugID: "agent-work"}
+	issue := newLinearIssue()
+	issue.Team = team
+	issue.Project = project
+	client := &fakeLinearClient{issue: issue, resolveTeam: team, resolveProject: project}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{"--title", "Example issue", "--team", "DEV", "--project", "agent-work"},
+	)
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	if client.createInput.ProjectID != "project-uuid" || client.projectTeam != "team-uuid" ||
+		client.projectTerm != "agent-work" {
+		t.Errorf(
+			"unexpected project resolution: input=%+v team=%q selector=%q",
+			client.createInput,
+			client.projectTeam,
+			client.projectTerm,
+		)
+	}
+
+	var output struct {
+		Project linearProjectOutput `json:"project"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode create output: %v", err)
+	}
+	if output.Project.ID != "project-uuid" || output.Project.SlugID != "agent-work" {
+		t.Errorf("unexpected project output: %+v", output.Project)
+	}
+}
+
 func TestHandleLinearTeamList(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "token")
 	client := &fakeLinearClient{teamPage: linear.TeamPage{
@@ -319,6 +390,216 @@ func TestHandleLinearTeamList(t *testing.T) {
 	}
 	if !output.PageInfo.HasNextPage || output.PageInfo.NextCursor != "next-cursor" {
 		t.Errorf("unexpected page info: %+v", output.PageInfo)
+	}
+}
+
+func TestHandleLinearProjectList(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	client := &fakeLinearClient{
+		resolveTeam: team,
+		projects: linear.ProjectPage{
+			Items:    []linear.Project{{ID: "project-uuid", Name: "Agent work", SlugID: "agent-work"}},
+			PageInfo: linear.PageInfo{HasNextPage: true, NextCursor: "next-cursor"},
+		},
+	}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearProjectList(&stdout, &stderr),
+		linearProjectListFlags(),
+		[]string{"--team", "DEV", "--limit", "25", "--cursor", "previous-cursor"},
+	)
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+	if client.projectTeam != "team-uuid" ||
+		client.projectPageRequest != (linear.ProjectListRequest{Limit: 25, Cursor: "previous-cursor"}) {
+		t.Errorf("unexpected list request: team=%q request=%+v", client.projectTeam, client.projectPageRequest)
+	}
+
+	var output struct {
+		Items    []linearProjectOutput `json:"items"`
+		PageInfo struct {
+			HasNextPage bool   `json:"hasNextPage"`
+			NextCursor  string `json:"nextCursor"`
+		} `json:"pageInfo"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode list output: %v", err)
+	}
+	if len(output.Items) != 1 || output.Items[0].ID != "project-uuid" ||
+		output.Items[0].SlugID != "agent-work" {
+		t.Errorf("unexpected list output: %+v", output)
+	}
+	if !output.PageInfo.HasNextPage || output.PageInfo.NextCursor != "next-cursor" {
+		t.Errorf("unexpected page info: %+v", output.PageInfo)
+	}
+}
+
+func TestHandleLinearUpdateResolvesAndClearsProject(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	project := linear.Project{ID: "project-uuid", Name: "Agent work", SlugID: "agent-work"}
+	issue := newLinearIssue()
+	issue.Team = team
+	issue.Project = project
+	client := &fakeLinearClient{issue: issue, resolveProject: project}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearUpdateFlags(),
+		[]string{"--project", "agent-work", "DEV-123"},
+	)
+	if err != nil {
+		t.Fatalf("update returned error: %v", err)
+	}
+	if client.updateInput.ProjectID == nil || *client.updateInput.ProjectID != "project-uuid" ||
+		client.updateInput.ClearProject || client.projectTeam != "team-uuid" || client.projectTerm != "agent-work" {
+		t.Errorf(
+			"unexpected project update: input=%+v team=%q selector=%q",
+			client.updateInput,
+			client.projectTeam,
+			client.projectTerm,
+		)
+	}
+	var movedOutput struct {
+		Project *linearProjectOutput `json:"project"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &movedOutput); err != nil {
+		t.Fatalf("decode moved issue output: %v", err)
+	}
+	if movedOutput.Project == nil || movedOutput.Project.ID != "project-uuid" {
+		t.Errorf("expected moved issue output to report project, got %+v", movedOutput)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	client.issue.Project = linear.Project{}
+	err = runLinearCommand(
+		t,
+		handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearUpdateFlags(),
+		[]string{"--clear-project", "DEV-123"},
+	)
+	if err != nil {
+		t.Fatalf("clear project returned error: %v", err)
+	}
+	if !client.updateInput.ClearProject || client.updateInput.ProjectID != nil {
+		t.Errorf("unexpected clear-project input: %+v", client.updateInput)
+	}
+	var clearedOutput struct {
+		Project *linearProjectOutput `json:"project"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &clearedOutput); err != nil {
+		t.Fatalf("decode cleared issue output: %v", err)
+	}
+	if clearedOutput.Project != nil {
+		t.Errorf("expected cleared issue output to report no project, got %+v", clearedOutput)
+	}
+}
+
+func TestHandleLinearUpdateProjectDryRunResolvesWithoutMutation(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	project := linear.Project{ID: "project-uuid", Name: "Agent work", SlugID: "agent-work"}
+	issue := newLinearIssue()
+	issue.Team = team
+	client := &fakeLinearClient{issue: issue, resolveProject: project}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearUpdateFlags(),
+		[]string{"--project", "agent-work", "--dry-run", "DEV-123"},
+	)
+	if err != nil {
+		t.Fatalf("dry run returned error: %v", err)
+	}
+	if client.updateCalls != 0 || client.projectTeam != "team-uuid" || client.projectTerm != "agent-work" {
+		t.Errorf(
+			"expected resolution but no mutation, got calls=%d team=%q selector=%q",
+			client.updateCalls,
+			client.projectTeam,
+			client.projectTerm,
+		)
+	}
+
+	var output struct {
+		DryRun bool `json:"dryRun"`
+		Input  struct {
+			ProjectID string `json:"projectId"`
+		} `json:"input"`
+		Resolved struct {
+			Project linearProjectOutput `json:"project"`
+		} `json:"resolved"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode dry-run output: %v", err)
+	}
+	if !output.DryRun || output.Input.ProjectID != "project-uuid" || output.Resolved.Project.ID != "project-uuid" {
+		t.Errorf("unexpected dry-run output: %+v", output)
+	}
+}
+
+func TestHandleLinearUpdateRejectsConflictingProjectFlags(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	client := &fakeLinearClient{}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearUpdateFlags(),
+		[]string{"--project", "agent-work", "--clear-project", "DEV-123"},
+	)
+	if err == nil {
+		t.Fatal("expected a non-zero exit error")
+	}
+	assertLinearErrorCode(t, stderr.Bytes(), "invalid_arguments")
+	if client.getID != "" || client.updateCalls != 0 {
+		t.Errorf("expected no issue read or mutation, got get=%q updates=%d", client.getID, client.updateCalls)
+	}
+}
+
+func TestHandleLinearCreateReportsProjectResolutionErrors(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	client := &fakeLinearClient{
+		resolveTeam: team,
+		resolveProjectErr: &linear.ProjectAmbiguousError{Selector: "agent", Candidates: []linear.Project{
+			{ID: "project-one", Name: "Agent", SlugID: "agent-one"},
+			{ID: "project-two", Name: "Agent", SlugID: "agent-two"},
+		}},
+	}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{"--title", "Example issue", "--team", "DEV", "--project", "agent"},
+	)
+	if err == nil {
+		t.Fatal("expected a non-zero exit error")
+	}
+	assertLinearErrorCode(t, stderr.Bytes(), "ambiguous_project")
+	if client.createCalls != 0 {
+		t.Errorf("expected no mutation calls, got %d", client.createCalls)
 	}
 }
 

@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/shurcooL/graphql"
 )
 
 const issueUpdateResponse = `{
@@ -78,6 +80,269 @@ func TestClientUpdateIssueClearsDescription(t *testing.T) {
 	}
 	if _, ok := request.Input["title"]; ok {
 		t.Errorf("expected title to be omitted, got %#v", request.Input)
+	}
+	if _, ok := request.Input["projectId"]; ok {
+		t.Errorf("expected project ID to be unchanged, got %#v", request.Input)
+	}
+}
+
+func TestClientUpdateIssueClearsProject(t *testing.T) {
+	requestReceived := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				Input map[string]any `json:"input"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode GraphQL request: %v", err)
+			return
+		}
+		requestReceived <- request.Variables.Input
+		_, err := w.Write([]byte(issueUpdateResponse))
+		if err != nil {
+			t.Errorf("write GraphQL response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	_, err := newClient("test-token", server.URL).UpdateIssue(
+		context.Background(),
+		"DEV-123",
+		UpdateIssueRequest{ClearProject: true},
+	)
+	if err != nil {
+		t.Fatalf("update issue: %v", err)
+	}
+
+	input := <-requestReceived
+	value, ok := input["projectId"]
+	if !ok || value != nil {
+		t.Errorf("expected an explicit null projectId, got %#v", input)
+	}
+}
+
+func TestClientCreateIssueIncludesProject(t *testing.T) {
+	requestReceived := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				Input map[string]any `json:"input"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode GraphQL request: %v", err)
+			return
+		}
+		requestReceived <- request.Variables.Input
+		_, err := w.Write([]byte(`{"data":{"issueCreate":{"success":true,"issue":{"id":"issue-uuid"}}}}`))
+		if err != nil {
+			t.Errorf("write GraphQL response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	_, err := newClient("test-token", server.URL).CreateIssue(context.Background(), IssueCreateInput{
+		Title: "Example", TeamID: "team-uuid", ProjectID: "project-uuid",
+	})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	input := <-requestReceived
+	if input["projectId"] != "project-uuid" {
+		t.Errorf("expected project ID in mutation input, got %#v", input)
+	}
+}
+
+func TestClientListProjectsPaginatesAndExcludesArchivedProjects(t *testing.T) {
+	requests := make([]struct {
+		First  int    `json:"first"`
+		After  string `json:"after"`
+		TeamID string `json:"teamID"`
+	}, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				First  int    `json:"first"`
+				After  string `json:"after"`
+				TeamID string `json:"teamID"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests = append(requests, request.Variables)
+		response := `{
+  "data": {
+    "team": {
+      "projects": {
+        "nodes": [
+          {"id":"project-one","name":"One","slugId":"one","archivedAt":null},
+          {"id":"project-archived","name":"Old","slugId":"old","archivedAt":"2025-01-01"}
+        ],
+        "pageInfo": {"hasNextPage":true,"endCursor":"cursor-one"}
+      }
+    }
+  }
+}`
+		if len(requests) == 2 {
+			response = `{
+  "data": {
+    "team": {
+      "projects": {
+        "nodes": [{"id":"project-two","name":"Two","slugId":"two","archivedAt":null}],
+        "pageInfo": {"hasNextPage":true,"endCursor":"cursor-two"}
+      }
+    }
+  }
+}`
+		}
+		if _, err := w.Write([]byte(response)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	page, err := newClient("test-token", server.URL).ListProjects(
+		context.Background(),
+		"team-uuid",
+		ProjectListRequest{Limit: 2},
+	)
+	if err != nil {
+		t.Fatalf("list projects: %v", err)
+	}
+	if len(page.Items) != 2 || page.Items[0].ID != "project-one" || page.Items[1].ID != "project-two" {
+		t.Errorf("unexpected projects: %+v", page.Items)
+	}
+	if !page.PageInfo.HasNextPage || page.PageInfo.NextCursor != "cursor-two" {
+		t.Errorf("unexpected page info: %+v", page.PageInfo)
+	}
+	if len(requests) != 2 || requests[0].First != 2 || requests[0].After != "" ||
+		requests[1].First != 1 || requests[1].After != "cursor-one" {
+		t.Errorf("unexpected pagination requests: %+v", requests)
+	}
+}
+
+func TestClientResolveProjectRequiresOneTeamScopedExactMatch(t *testing.T) {
+	tests := []struct {
+		name      string
+		selector  string
+		response  string
+		wantType  any
+		wantID    string
+		wantName  string
+		wantCalls int
+	}{
+		{
+			name:     "resolves exact slug",
+			selector: "agent-work",
+			response: `{
+  "data": {"team": {"projects": {
+    "nodes": [{"id":"project-uuid","name":"Agent work","slugId":"agent-work","archivedAt":null}],
+    "pageInfo": {"hasNextPage":false,"endCursor":""}
+  }}}
+}`,
+			wantName: "Agent work",
+		},
+		{
+			name:     "resolves exact UUID",
+			selector: "11111111-1111-1111-1111-111111111111",
+			response: `{
+  "data": {
+    "team": {
+      "projects": {
+        "nodes": [
+          {"id":"11111111-1111-1111-1111-111111111111","name":"Agent work","slugId":"agent-work","archivedAt":null}
+        ],
+        "pageInfo": {"hasNextPage":false,"endCursor":""}
+      }
+    }
+  }
+}`,
+			wantID:   "11111111-1111-1111-1111-111111111111",
+			wantName: "Agent work",
+		},
+		{
+			name:     "resolves exact case insensitive name",
+			selector: "AGENT WORK",
+			response: `{
+  "data": {"team": {"projects": {
+    "nodes": [{"id":"project-uuid","name":"Agent work","slugId":"agent-work","archivedAt":null}],
+    "pageInfo": {"hasNextPage":false,"endCursor":""}
+  }}}
+}`,
+			wantName: "Agent work",
+		},
+		{
+			name:     "rejects ambiguous exact names",
+			selector: "Agent work",
+			response: `{
+  "data": {"team": {"projects": {
+    "nodes": [
+      {"id":"project-one","name":"Agent work","slugId":"agent-work-one","archivedAt":null},
+      {"id":"project-two","name":"Agent work","slugId":"agent-work-two","archivedAt":null}
+    ],
+    "pageInfo": {"hasNextPage":false,"endCursor":""}
+  }}}
+}`,
+			wantType: &ProjectAmbiguousError{},
+		},
+		{
+			name:     "rejects missing project",
+			selector: "missing",
+			response: `{"data":{"team":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+			wantType: &ProjectNotFoundError{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if _, err := w.Write([]byte(tt.response)); err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			project, err := newClient("test-token", server.URL).ResolveProject(
+				context.Background(), "team-uuid", tt.selector,
+			)
+			if tt.wantType == nil {
+				if err != nil {
+					t.Fatalf("resolve project: %v", err)
+				}
+				wantID := tt.wantID
+				if wantID == "" {
+					wantID = "project-uuid"
+				}
+				if project.ID != wantID || project.Name != graphql.String(tt.wantName) {
+					t.Errorf("unexpected project: %+v", project)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected resolution error")
+			}
+			switch tt.wantType.(type) {
+			case *ProjectNotFoundError:
+				var target *ProjectNotFoundError
+				if !errors.As(err, &target) {
+					t.Errorf("expected ProjectNotFoundError, got %T", err)
+				}
+			case *ProjectAmbiguousError:
+				var target *ProjectAmbiguousError
+				if !errors.As(err, &target) {
+					t.Errorf("expected ProjectAmbiguousError, got %T", err)
+				}
+				if len(target.Candidates) != 2 {
+					t.Errorf("expected useful candidates, got %+v", target.Candidates)
+				}
+			}
+		})
 	}
 }
 

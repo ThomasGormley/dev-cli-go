@@ -280,6 +280,19 @@ func Run(
 							},
 						},
 					},
+					{
+						Name:  "project",
+						Usage: "Discover accessible Linear projects",
+						Subcommands: []*cli.Command{
+							{
+								Name:         "list",
+								Usage:        "List active accessible projects for a team",
+								Flags:        linearProjectListFlags(),
+								OnUsageError: linearUsageError(stderr),
+								Action:       handleLinearProjectList(stdout, stderr),
+							},
+						},
+					},
 				},
 			},
 		},

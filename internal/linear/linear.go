@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/shurcooL/graphql"
 )
@@ -15,7 +16,9 @@ const apiURL = "https://api.linear.app/graphql"
 type Clienter interface {
 	CreateIssue(ctx context.Context, input IssueCreateInput) (Issue, error)
 	GetIssue(ctx context.Context, id string) (Issue, error)
+	ListProjects(ctx context.Context, teamID string, request ProjectListRequest) (ProjectPage, error)
 	ListTeams(ctx context.Context, request TeamListRequest) (TeamPage, error)
+	ResolveProject(ctx context.Context, teamID string, selector string) (Project, error)
 	ResolveTeam(ctx context.Context, selector string) (Team, error)
 	UpdateIssue(ctx context.Context, id string, input UpdateIssueRequest) (Issue, error)
 }
@@ -72,6 +75,7 @@ type Issue struct {
 	State       WorkflowState  `graphql:"state"`
 	BranchName  graphql.String `graphql:"branchName"`
 	Team        Team           `graphql:"team"`
+	Project     Project        `graphql:"project"`
 }
 
 type User struct {
@@ -87,6 +91,13 @@ type Team struct {
 	RetiredAt graphql.String `graphql:"retiredAt"`
 }
 
+type Project struct {
+	ID         graphql.ID     `graphql:"id"`
+	Name       graphql.String `graphql:"name"`
+	SlugID     graphql.String `graphql:"slugId"`
+	ArchivedAt graphql.String `graphql:"archivedAt"`
+}
+
 type PageInfo struct {
 	HasNextPage bool
 	NextCursor  string
@@ -99,6 +110,16 @@ type TeamListRequest struct {
 
 type TeamPage struct {
 	Items    []Team
+	PageInfo PageInfo
+}
+
+type ProjectListRequest struct {
+	Limit  int
+	Cursor string
+}
+
+type ProjectPage struct {
+	Items    []Project
 	PageInfo PageInfo
 }
 
@@ -117,6 +138,25 @@ type TeamAmbiguousError struct {
 
 func (e *TeamAmbiguousError) Error() string {
 	return fmt.Sprintf("multiple active teams match %q", e.Selector)
+}
+
+type ProjectNotFoundError struct {
+	TeamID   string
+	Selector string
+}
+
+func (e *ProjectNotFoundError) Error() string {
+	return fmt.Sprintf("no active project in team %q matches %q", e.TeamID, e.Selector)
+}
+
+type ProjectAmbiguousError struct {
+	TeamID     string
+	Selector   string
+	Candidates []Project
+}
+
+func (e *ProjectAmbiguousError) Error() string {
+	return fmt.Sprintf("multiple active projects in team %q match %q", e.TeamID, e.Selector)
 }
 
 type StringComparator struct {
@@ -144,6 +184,11 @@ type teamConnection struct {
 	PageInfo graphqlPageInfo `graphql:"pageInfo"`
 }
 
+type projectConnection struct {
+	Nodes    []Project       `graphql:"nodes"`
+	PageInfo graphqlPageInfo `graphql:"pageInfo"`
+}
+
 type graphqlPageInfo struct {
 	HasNextPage graphql.Boolean `graphql:"hasNextPage"`
 	EndCursor   graphql.String  `graphql:"endCursor"`
@@ -159,6 +204,12 @@ type filteredTeamsQuery struct {
 
 type teamByIDQuery struct {
 	Team Team `graphql:"team(id: $id)"`
+}
+
+type teamProjectsQuery struct {
+	Team struct {
+		Projects projectConnection `graphql:"projects(first: $first, after: $after)"`
+	} `graphql:"team(id: $teamID)"`
 }
 
 // RPC-style method to get issue information
@@ -204,6 +255,33 @@ func (c *Client) ListTeams(ctx context.Context, request TeamListRequest) (TeamPa
 	return TeamPage{Items: items, PageInfo: pageInfo}, nil
 }
 
+func (c *Client) ListProjects(ctx context.Context, teamID string, request ProjectListRequest) (ProjectPage, error) {
+	if request.Limit < 1 {
+		return ProjectPage{}, errors.New("project list limit must be greater than zero")
+	}
+
+	items := []Project{}
+	cursor := request.Cursor
+	pageInfo := PageInfo{}
+	for len(items) < request.Limit {
+		connection, err := c.queryTeamProjects(ctx, teamID, request.Limit-len(items), cursor)
+		if err != nil {
+			return ProjectPage{}, &APIError{Operation: "list projects", Err: err}
+		}
+		for _, project := range connection.Nodes {
+			if len(items) < request.Limit && isActiveProject(project) {
+				items = append(items, project)
+			}
+		}
+		pageInfo = newPageInfo(connection.PageInfo)
+		if !pageInfo.HasNextPage {
+			break
+		}
+		cursor = pageInfo.NextCursor
+	}
+	return ProjectPage{Items: items, PageInfo: pageInfo}, nil
+}
+
 func (c *Client) ResolveTeam(ctx context.Context, selector string) (Team, error) {
 	if selector == "" {
 		return Team{}, &TeamNotFoundError{Selector: selector}
@@ -233,6 +311,32 @@ func (c *Client) ResolveTeam(ctx context.Context, selector string) (Team, error)
 	return exactlyOneTeam(selector, nameMatches)
 }
 
+func (c *Client) ResolveProject(ctx context.Context, teamID string, selector string) (Project, error) {
+	if selector == "" {
+		return Project{}, &ProjectNotFoundError{TeamID: teamID, Selector: selector}
+	}
+
+	candidates := []Project{}
+	cursor := ""
+	for {
+		connection, err := c.queryTeamProjects(ctx, teamID, 50, cursor)
+		if err != nil {
+			return Project{}, &APIError{Operation: "resolve project", Err: err}
+		}
+		for _, project := range connection.Nodes {
+			if isActiveProject(project) && projectMatchesSelector(project, selector) {
+				candidates = append(candidates, project)
+			}
+		}
+		pageInfo := newPageInfo(connection.PageInfo)
+		if !pageInfo.HasNextPage {
+			break
+		}
+		cursor = pageInfo.NextCursor
+	}
+	return exactlyOneProject(teamID, selector, candidates)
+}
+
 func (c *Client) queryTeams(ctx context.Context, limit int, cursor string) (teamConnection, error) {
 	var query teamsQuery
 	variables := map[string]any{
@@ -243,6 +347,24 @@ func (c *Client) queryTeams(ctx context.Context, limit int, cursor string) (team
 		return teamConnection{}, err
 	}
 	return query.Teams, nil
+}
+
+func (c *Client) queryTeamProjects(
+	ctx context.Context,
+	teamID string,
+	limit int,
+	cursor string,
+) (projectConnection, error) {
+	var query teamProjectsQuery
+	variables := map[string]any{
+		"teamID": graphql.ID(teamID),
+		"first":  graphql.Int(limit),
+		"after":  newCursor(cursor),
+	}
+	if err := c.client.Query(ctx, &query, variables); err != nil {
+		return projectConnection{}, err
+	}
+	return query.Team.Projects, nil
 }
 
 func (c *Client) queryTeamsByFilter(ctx context.Context, filter TeamFilter) ([]Team, error) {
@@ -291,6 +413,17 @@ func exactlyOneTeam(selector string, candidates []Team) (Team, error) {
 	}
 }
 
+func exactlyOneProject(teamID string, selector string, candidates []Project) (Project, error) {
+	switch len(candidates) {
+	case 0:
+		return Project{}, &ProjectNotFoundError{TeamID: teamID, Selector: selector}
+	case 1:
+		return candidates[0], nil
+	default:
+		return Project{}, &ProjectAmbiguousError{TeamID: teamID, Selector: selector, Candidates: candidates}
+	}
+}
+
 func exactComparator(value string) *StringComparator {
 	selector := graphql.String(value)
 	return &StringComparator{EqIgnoreCase: &selector}
@@ -310,6 +443,18 @@ func newPageInfo(pageInfo graphqlPageInfo) PageInfo {
 
 func isActiveTeam(team Team) bool {
 	return team.ID != nil && team.RetiredAt == ""
+}
+
+func isActiveProject(project Project) bool {
+	return project.ID != nil && project.ArchivedAt == ""
+}
+
+func projectMatchesSelector(project Project, selector string) bool {
+	if isUUID(selector) {
+		id, ok := project.ID.(string)
+		return ok && id == selector
+	}
+	return string(project.SlugID) == selector || strings.EqualFold(string(project.Name), selector)
 }
 
 func isUUID(value string) bool {
@@ -346,12 +491,15 @@ type IssueCreateInput struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	TeamID      string `json:"teamId"`
+	ProjectID   string `json:"projectId,omitempty"`
 }
 
 type UpdateIssueRequest struct {
 	Title            *string
 	Description      *string
 	ClearDescription bool
+	ProjectID        *string
+	ClearProject     bool
 }
 
 func (i UpdateIssueRequest) MarshalJSON() ([]byte, error) {
@@ -365,11 +513,28 @@ func (i UpdateIssueRequest) MarshalJSON() ([]byte, error) {
 	if i.ClearDescription {
 		input["description"] = nil
 	}
+	if i.ProjectID != nil {
+		input["projectId"] = *i.ProjectID
+	}
+	if i.ClearProject {
+		input["projectId"] = nil
+	}
 	return json.Marshal(input)
 }
 
 type nullableString struct {
 	Value *graphql.String
+}
+
+type nullableID struct {
+	Value *graphql.ID
+}
+
+func (s nullableID) MarshalJSON() ([]byte, error) {
+	if s.Value == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(*s.Value)
 }
 
 func (s nullableString) MarshalJSON() ([]byte, error) {
@@ -382,6 +547,7 @@ func (s nullableString) MarshalJSON() ([]byte, error) {
 type IssueUpdateInput struct {
 	Title       *graphql.String `json:"title,omitempty"`
 	Description *nullableString `json:"description,omitempty"`
+	ProjectID   *nullableID     `json:"projectId,omitempty"`
 	AssigneeID  graphql.ID      `json:"assigneeId,omitempty"`
 	StateID     graphql.ID      `json:"stateId,omitempty"`
 }
@@ -539,6 +705,13 @@ func newIssueUpdateInput(input UpdateIssueRequest) IssueUpdateInput {
 	}
 	if input.ClearDescription {
 		output.Description = &nullableString{}
+	}
+	if input.ProjectID != nil {
+		projectID := graphql.ID(*input.ProjectID)
+		output.ProjectID = &nullableID{Value: &projectID}
+	}
+	if input.ClearProject {
+		output.ProjectID = &nullableID{}
 	}
 	return output
 }
