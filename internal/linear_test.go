@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/urfave/cli/v2"
@@ -38,6 +40,12 @@ type fakeLinearClient struct {
 	projectPageRequest linear.ProjectListRequest
 	resolveProject     linear.Project
 	resolveProjectErr  error
+	labelPage          linear.LabelPage
+	labelRequest       linear.LabelListRequest
+	labelListTeam      string
+	resolveLabels      map[string]linear.Label
+	labelTeams         []string
+	labelTerms         []string
 }
 
 func (f *fakeLinearClient) CreateIssue(_ context.Context, input linear.IssueCreateInput) (linear.Issue, error) {
@@ -70,6 +78,19 @@ func (f *fakeLinearClient) ListTeams(_ context.Context, request linear.TeamListR
 	return f.teamPage, nil
 }
 
+func (f *fakeLinearClient) ListLabels(
+	_ context.Context,
+	teamID string,
+	request linear.LabelListRequest,
+) (linear.LabelPage, error) {
+	f.labelListTeam = teamID
+	f.labelRequest = request
+	if f.listErr != nil {
+		return linear.LabelPage{}, f.listErr
+	}
+	return f.labelPage, nil
+}
+
 func (f *fakeLinearClient) ResolveTeam(_ context.Context, selector string) (linear.Team, error) {
 	f.resolveTerm = selector
 	if f.resolveErr != nil {
@@ -98,6 +119,16 @@ func (f *fakeLinearClient) ResolveProject(_ context.Context, teamID string, sele
 		return linear.Project{}, f.resolveProjectErr
 	}
 	return f.resolveProject, nil
+}
+
+func (f *fakeLinearClient) ResolveLabel(_ context.Context, teamID, selector string) (linear.Label, error) {
+	f.labelTeams = append(f.labelTeams, teamID)
+	f.labelTerms = append(f.labelTerms, selector)
+	label, ok := f.resolveLabels[selector]
+	if !ok {
+		return linear.Label{}, &linear.LabelNotFoundError{Selector: selector}
+	}
+	return label, nil
 }
 
 func newLinearIssue() linear.Issue {
@@ -136,7 +167,7 @@ func TestHandleLinearCreateSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create returned error: %v", err)
 	}
-	if client.createInput != (linear.IssueCreateInput{
+	if !reflect.DeepEqual(client.createInput, linear.IssueCreateInput{
 		Title: "Example issue", Description: "Example description", TeamID: "team-uuid",
 	}) {
 		t.Errorf("unexpected create input: %+v", client.createInput)
@@ -252,7 +283,7 @@ func TestHandleLinearCreateDryRunDoesNotCallClient(t *testing.T) {
 	if !output.DryRun || output.Operation != "create" {
 		t.Errorf("unexpected dry-run output: %+v", output)
 	}
-	if output.Input != (linear.IssueCreateInput{
+	if !reflect.DeepEqual(output.Input, linear.IssueCreateInput{
 		Title: "Example issue", Description: "body from stdin", TeamID: "team-uuid",
 	}) {
 		t.Errorf("unexpected dry-run input: %+v", output.Input)
@@ -434,6 +465,67 @@ func TestHandleLinearProjectList(t *testing.T) {
 	if len(output.Items) != 1 || output.Items[0].ID != "project-uuid" ||
 		output.Items[0].SlugID != "agent-work" {
 		t.Errorf("unexpected list output: %+v", output)
+	}
+	if !output.PageInfo.HasNextPage || output.PageInfo.NextCursor != "next-cursor" {
+		t.Errorf("unexpected page info: %+v", output.PageInfo)
+	}
+}
+
+func TestHandleLinearLabelListIncludesTeamWorkspaceAndGroups(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	client := &fakeLinearClient{
+		resolveTeam: team,
+		labelPage: linear.LabelPage{
+			Items: []linear.Label{
+				{ID: "team-label", Name: "Bug", Team: team},
+				{ID: "workspace-group", Name: "Type", IsGroup: true},
+			},
+			PageInfo: linear.PageInfo{HasNextPage: true, NextCursor: "next-cursor"},
+		},
+	}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearLabelList(&stdout, &stderr),
+		linearLabelListFlags(),
+		[]string{"--team", "DEV", "--limit", "25", "--cursor", "previous-cursor"},
+	)
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+	if client.resolveTerm != "DEV" || client.labelListTeam != "team-uuid" ||
+		client.labelRequest != (linear.LabelListRequest{Limit: 25, Cursor: "previous-cursor"}) {
+		t.Errorf(
+			"unexpected label list request: selector=%q team=%q request=%+v",
+			client.resolveTerm,
+			client.labelListTeam,
+			client.labelRequest,
+		)
+	}
+	var output struct {
+		Items []struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			IsGroup bool   `json:"isGroup"`
+			Team    *struct {
+				ID string `json:"id"`
+			} `json:"team"`
+		} `json:"items"`
+		PageInfo struct {
+			HasNextPage bool   `json:"hasNextPage"`
+			NextCursor  string `json:"nextCursor"`
+		} `json:"pageInfo"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode label list output: %v", err)
+	}
+	if len(output.Items) != 2 || output.Items[0].Team == nil || output.Items[0].Team.ID != "team-uuid" ||
+		!output.Items[1].IsGroup || output.Items[1].Team != nil {
+		t.Errorf("unexpected label list output: %+v", output)
 	}
 	if !output.PageInfo.HasNextPage || output.PageInfo.NextCursor != "next-cursor" {
 		t.Errorf("unexpected page info: %+v", output.PageInfo)
@@ -850,5 +942,141 @@ func assertLinearErrorCode(t *testing.T, data []byte, wantCode string) {
 	}
 	if output.Error.Code != wantCode {
 		t.Errorf("expected error code %q, got %q", wantCode, output.Error.Code)
+	}
+}
+
+func TestHandleLinearCreateResolvesMultipleLabelsBeforeMutation(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	t.Setenv("LINEAR_TEAM_ID", "team-uuid")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	client := &fakeLinearClient{
+		issue:       newLinearIssue(),
+		resolveTeam: team,
+		resolveLabels: map[string]linear.Label{
+			"Bug":      {ID: "label-bug", Name: "Bug", Team: team},
+			"Platform": {ID: "label-platform", Name: "Platform"},
+		},
+	}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{"--title", "Example issue", "--label", "Bug", "--label", "Platform"},
+	)
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	if got, want := client.createInput.LabelIDs, []string{"label-bug", "label-platform"}; !slices.Equal(got, want) {
+		t.Errorf("expected resolved labels %v, got %v", want, got)
+	}
+	if got, want := client.labelTeams, []string{"team-uuid", "team-uuid"}; !slices.Equal(got, want) {
+		t.Errorf("expected labels resolved within team %v, got %v", want, got)
+	}
+}
+
+func TestHandleLinearUpdatePatchesLabelsWithinIssueTeam(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	issue := newLinearIssue()
+	issue.Team = team
+	client := &fakeLinearClient{
+		issue: issue,
+		resolveLabels: map[string]linear.Label{
+			"Bug":  {ID: "label-bug", Name: "Bug", Team: team},
+			"Docs": {ID: "label-docs", Name: "Docs"},
+		},
+	}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearUpdateFlags(),
+		[]string{"--add-label", "Bug", "--remove-label", "Docs", "DEV-123"},
+	)
+	if err != nil {
+		t.Fatalf("update returned error: %v", err)
+	}
+	if client.getID != "DEV-123" {
+		t.Errorf("expected issue read before label resolution, got %q", client.getID)
+	}
+	if got, want := client.updateInput.AddedLabelIDs, []string{"label-bug"}; !slices.Equal(got, want) {
+		t.Errorf("expected added labels %v, got %v", want, got)
+	}
+	if got, want := client.updateInput.RemovedLabelIDs, []string{"label-docs"}; !slices.Equal(got, want) {
+		t.Errorf("expected removed labels %v, got %v", want, got)
+	}
+}
+
+func TestHandleLinearUpdateRejectsConflictingLabelFlagsBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "clear and add",
+			args: []string{"--clear-labels", "--add-label", "Bug", "DEV-123"},
+		},
+		{
+			name: "clear and remove",
+			args: []string{"--clear-labels", "--remove-label", "Bug", "DEV-123"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LINEAR_API_KEY", "token")
+			client := &fakeLinearClient{}
+			withLinearClient(t, client)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			err := runLinearCommand(
+				t,
+				handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+				linearUpdateFlags(),
+				tt.args,
+			)
+			if err == nil {
+				t.Fatal("expected a non-zero exit error")
+			}
+			assertLinearErrorCode(t, stderr.Bytes(), "invalid_arguments")
+			if client.getID != "" || client.updateCalls != 0 {
+				t.Errorf("expected no read or mutation, got get=%q updates=%d", client.getID, client.updateCalls)
+			}
+		})
+	}
+}
+
+func TestHandleLinearUpdateRejectsTheSameResolvedLabelInBothPatches(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	issue := newLinearIssue()
+	issue.Team = team
+	client := &fakeLinearClient{
+		issue:         issue,
+		resolveLabels: map[string]linear.Label{"Bug": {ID: "label-bug", Name: "Bug", Team: team}},
+	}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearUpdateFlags(),
+		[]string{"--add-label", "Bug", "--remove-label", "Bug", "DEV-123"},
+	)
+	if err == nil {
+		t.Fatal("expected a non-zero exit error")
+	}
+	assertLinearErrorCode(t, stderr.Bytes(), "invalid_arguments")
+	if client.updateCalls != 0 {
+		t.Errorf("expected no mutation, got %d calls", client.updateCalls)
 	}
 }

@@ -18,6 +18,7 @@ type linearCommandError struct {
 	Message           string
 	TeamCandidates    []linear.Team
 	ProjectCandidates []linear.Project
+	LabelCandidates   []linear.Label
 	Err               error
 }
 
@@ -64,6 +65,18 @@ type linearProjectListOutput struct {
 	PageInfo linearPageInfoOutput  `json:"pageInfo"`
 }
 
+type linearLabelOutput struct {
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	IsGroup bool              `json:"isGroup"`
+	Team    *linearTeamOutput `json:"team"`
+}
+
+type linearLabelListOutput struct {
+	Items    []linearLabelOutput  `json:"items"`
+	PageInfo linearPageInfoOutput `json:"pageInfo"`
+}
+
 type linearIssueOutput struct {
 	ID          string               `json:"id"`
 	Identifier  string               `json:"identifier"`
@@ -84,10 +97,12 @@ type linearDryRunOutput struct {
 type linearCreateResolvedOutput struct {
 	Team    linearTeamOutput     `json:"team"`
 	Project *linearProjectOutput `json:"project"`
+	Labels  []linearLabelOutput  `json:"labels,omitempty"`
 }
 
 type linearUpdateResolvedOutput struct {
 	Project *linearProjectOutput `json:"project"`
+	Labels  []linearLabelOutput  `json:"labels,omitempty"`
 }
 
 type linearProjectChange struct {
@@ -134,6 +149,7 @@ func linearCreateFlags() []cli.Flag {
 	return append(linearMutationFlags(),
 		&cli.StringFlag{Name: "team", Usage: "team UUID, key, or exact name"},
 		&cli.StringFlag{Name: "project", Usage: "project UUID, slug, or exact name"},
+		&cli.StringSliceFlag{Name: "label", Usage: "label UUID or exact name (repeatable)"},
 		&cli.BoolFlag{Name: "dry-run", Usage: "validate and print the mutation input without creating an issue"},
 	)
 }
@@ -153,11 +169,22 @@ func linearProjectListFlags() []cli.Flag {
 	}
 }
 
+func linearLabelListFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "team", Usage: "team UUID, key, or exact name"},
+		&cli.IntFlag{Name: "limit", Value: 50, Usage: "maximum number of labels to return"},
+		&cli.StringFlag{Name: "cursor", Usage: "cursor from a previous label list response"},
+	}
+}
+
 func linearUpdateFlags() []cli.Flag {
 	return append(linearMutationFlags(),
 		&cli.BoolFlag{Name: "clear-description", Usage: "clear the issue description"},
 		&cli.StringFlag{Name: "project", Usage: "project UUID, slug, or exact name"},
 		&cli.BoolFlag{Name: "clear-project", Usage: "remove the issue from its project"},
+		&cli.StringSliceFlag{Name: "add-label", Usage: "label UUID or exact name to add (repeatable)"},
+		&cli.StringSliceFlag{Name: "remove-label", Usage: "label UUID or exact name to remove (repeatable)"},
+		&cli.BoolFlag{Name: "clear-labels", Usage: "remove all issue labels"},
 		&cli.BoolFlag{Name: "dry-run", Usage: "validate and print the mutation input without updating the issue"},
 	)
 }
@@ -214,8 +241,20 @@ func handleLinearCreate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		if err != nil {
 			return exitLinearError(stderr, err)
 		}
-
-		input := linear.IssueCreateInput{Title: title, Description: description, TeamID: resolvedTeam.ID}
+		labels, err := resolveLinearLabels(c.Context, client, resolvedTeam.ID, c.StringSlice("label"))
+		if err != nil {
+			return exitLinearError(stderr, err)
+		}
+		labelOutputs, err := newLinearLabelOutputs(labels)
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("invalid resolved label", err))
+		}
+		input := linear.IssueCreateInput{
+			Title:       title,
+			Description: description,
+			TeamID:      resolvedTeam.ID,
+			LabelIDs:    linearLabelIDs(labels),
+		}
 		if hasProject {
 			input.ProjectID = resolvedProject.ID
 		}
@@ -227,6 +266,7 @@ func handleLinearCreate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 				Resolved: linearCreateResolvedOutput{
 					Team:    resolvedTeam,
 					Project: optionalLinearProject(resolvedProject, hasProject),
+					Labels:  labelOutputs,
 				},
 			})
 		}
@@ -238,6 +278,42 @@ func handleLinearCreate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		output, err := newLinearIssueOutput(issue, resolvedTeam, optionalLinearProject(resolvedProject, hasProject))
 		if err != nil {
 			return exitLinearError(stderr, linearAPIError("invalid created issue", err))
+		}
+		return writeLinearJSON(stdout, output)
+	}
+}
+
+func handleLinearLabelList(stdout, stderr io.Writer) cli.ActionFunc {
+	return func(c *cli.Context) error {
+		if err := requireLinearAPIKey(); err != nil {
+			return exitLinearError(stderr, err)
+		}
+		limit := c.Int("limit")
+		if limit < 1 {
+			return exitLinearError(stderr, invalidLinearArguments("--limit must be greater than zero"))
+		}
+		selector, err := linearTeamSelector(c)
+		if err != nil {
+			return exitLinearError(stderr, err)
+		}
+		client := newLinearClient()
+		team, err := client.ResolveTeam(c.Context, selector)
+		if err != nil {
+			return exitLinearError(stderr, linearTeamResolutionError(err))
+		}
+		teamOutput, err := newLinearTeamOutput(team)
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("invalid resolved team", err))
+		}
+		page, err := client.ListLabels(c.Context, teamOutput.ID, linear.LabelListRequest{
+			Limit: limit, Cursor: c.String("cursor"),
+		})
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("failed to list labels", err))
+		}
+		output, err := newLinearLabelListOutput(page)
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("invalid label list response", err))
 		}
 		return writeLinearJSON(stdout, output)
 	}
@@ -347,14 +423,18 @@ func handleLinearUpdate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		}
 		if !hasLinearUpdate(input) && !projectChange.IsSet() {
 			return exitLinearError(stderr, invalidLinearArguments(
-				"at least --title, --description, --description-file, --clear-description, --project, or --clear-project required",
+				"at least one issue field, project change, or label change required",
 			))
 		}
 		if err := requireLinearAPIKey(); err != nil {
 			return exitLinearError(stderr, err)
 		}
-
 		client := newLinearClient()
+		input, resolvedLabels, err := resolveLinearUpdateLabels(c.Context, client, issueID, input)
+		if err != nil {
+			return exitLinearError(stderr, err)
+		}
+
 		input, resolvedProject, err := applyLinearProjectChange(
 			c.Context,
 			client,
@@ -367,9 +447,11 @@ func handleLinearUpdate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		}
 
 		if c.Bool("dry-run") {
-			return writeLinearJSON(stdout, newLinearUpdateDryRunOutput(issueID, input, resolvedProject))
+			return writeLinearJSON(
+				stdout,
+				newLinearUpdateDryRunOutput(issueID, input, resolvedProject, resolvedLabels),
+			)
 		}
-
 		issue, err := client.UpdateIssue(c.Context, issueID, input)
 		if err != nil {
 			return exitLinearError(stderr, linearAPIError("failed to update issue", err))
@@ -384,6 +466,43 @@ func handleLinearUpdate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		}
 		return writeLinearJSON(stdout, output)
 	}
+}
+
+func resolveLinearUpdateLabels(
+	ctx context.Context,
+	client linear.Clienter,
+	issueID string,
+	input linear.UpdateIssueRequest,
+) (linear.UpdateIssueRequest, []linearLabelOutput, error) {
+	if len(input.AddedLabelIDs) == 0 && len(input.RemovedLabelIDs) == 0 {
+		return input, nil, nil
+	}
+	issue, err := client.GetIssue(ctx, issueID)
+	if err != nil {
+		return linear.UpdateIssueRequest{}, nil, linearAPIError("failed to get issue for label resolution", err)
+	}
+	team, err := newLinearTeamOutput(issue.Team)
+	if err != nil {
+		return linear.UpdateIssueRequest{}, nil, linearAPIError("invalid issue team", err)
+	}
+	addedLabels, err := resolveLinearLabels(ctx, client, team.ID, input.AddedLabelIDs)
+	if err != nil {
+		return linear.UpdateIssueRequest{}, nil, err
+	}
+	removedLabels, err := resolveLinearLabels(ctx, client, team.ID, input.RemovedLabelIDs)
+	if err != nil {
+		return linear.UpdateIssueRequest{}, nil, err
+	}
+	if err := ensureDistinctLabelChanges(addedLabels, removedLabels); err != nil {
+		return linear.UpdateIssueRequest{}, nil, err
+	}
+	labelOutputs, err := newLinearLabelOutputs(append(addedLabels, removedLabels...))
+	if err != nil {
+		return linear.UpdateIssueRequest{}, nil, linearAPIError("invalid resolved label", err)
+	}
+	input.AddedLabelIDs = linearLabelIDs(addedLabels)
+	input.RemovedLabelIDs = linearLabelIDs(removedLabels)
+	return input, labelOutputs, nil
 }
 
 func linearDescription(c *cli.Context, stdin io.Reader, allowClear bool) (string, error) {
@@ -427,7 +546,17 @@ func linearUpdateInput(c *cli.Context, stdin io.Reader) (linear.UpdateIssueReque
 	if err != nil {
 		return linear.UpdateIssueRequest{}, err
 	}
-	input := linear.UpdateIssueRequest{ClearDescription: c.Bool("clear-description")}
+	input := linear.UpdateIssueRequest{
+		ClearDescription: c.Bool("clear-description"),
+		AddedLabelIDs:    c.StringSlice("add-label"),
+		RemovedLabelIDs:  c.StringSlice("remove-label"),
+		ClearLabels:      c.Bool("clear-labels"),
+	}
+	if input.ClearLabels && (len(input.AddedLabelIDs) > 0 || len(input.RemovedLabelIDs) > 0) {
+		return linear.UpdateIssueRequest{}, invalidLinearArguments(
+			"--clear-labels cannot be used with --add-label or --remove-label",
+		)
+	}
 	if c.IsSet("title") {
 		title := c.String("title")
 		if title == "" {
@@ -443,7 +572,8 @@ func linearUpdateInput(c *cli.Context, stdin io.Reader) (linear.UpdateIssueReque
 
 func hasLinearUpdate(input linear.UpdateIssueRequest) bool {
 	return input.Title != nil || input.Description != nil || input.ClearDescription ||
-		input.ProjectID != nil || input.ClearProject
+		input.ProjectID != nil || input.ClearProject || len(input.AddedLabelIDs) > 0 ||
+		len(input.RemovedLabelIDs) > 0 || input.ClearLabels
 }
 
 func linearProjectUpdate(c *cli.Context) (linearProjectChange, error) {
@@ -497,14 +627,15 @@ func newLinearUpdateDryRunOutput(
 	issueID string,
 	input linear.UpdateIssueRequest,
 	projectChange linearResolvedProjectChange,
+	labels []linearLabelOutput,
 ) linearDryRunOutput {
 	output := linearDryRunOutput{
 		DryRun:    true,
 		Operation: "update",
 		Input:     linearUpdateDryRunInput{ID: issueID, Update: input},
 	}
-	if projectChange.Changed {
-		output.Resolved = linearUpdateResolvedOutput{Project: projectChange.Project}
+	if projectChange.Changed || len(labels) > 0 {
+		output.Resolved = linearUpdateResolvedOutput{Project: projectChange.Project, Labels: labels}
 	}
 	return output
 }
@@ -531,6 +662,66 @@ func resolveLinearProject(
 		return linearProjectOutput{}, false, linearAPIError("invalid resolved project", err)
 	}
 	return output, true, nil
+}
+
+func resolveLinearLabels(
+	ctx context.Context,
+	client linear.Clienter,
+	teamID string,
+	selectors []string,
+) ([]linear.Label, error) {
+	labels := make([]linear.Label, 0, len(selectors))
+	for _, selector := range selectors {
+		if selector == "" {
+			return nil, invalidLinearArguments("label selectors cannot be empty")
+		}
+		label, err := client.ResolveLabel(ctx, teamID, selector)
+		if err != nil {
+			return nil, linearLabelResolutionError(err)
+		}
+		if !containsLinearLabel(labels, label) {
+			labels = append(labels, label)
+		}
+	}
+	return labels, nil
+}
+
+func ensureDistinctLabelChanges(addedLabels, removedLabels []linear.Label) error {
+	for _, addedLabel := range addedLabels {
+		if containsLinearLabel(removedLabels, addedLabel) {
+			return invalidLinearArguments("the same label cannot be added and removed in one command")
+		}
+	}
+	return nil
+}
+
+func containsLinearLabel(labels []linear.Label, target linear.Label) bool {
+	targetID, ok := target.ID.(string)
+	if !ok {
+		return false
+	}
+	for _, label := range labels {
+		id, ok := label.ID.(string)
+		if ok && id == targetID {
+			return true
+		}
+	}
+	return false
+}
+
+func linearLabelIDs(labels []linear.Label) []string {
+	if len(labels) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(labels))
+	for _, label := range labels {
+		id, ok := label.ID.(string)
+		if !ok || id == "" {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func linearIssueID(c *cli.Context) (string, error) {
@@ -589,6 +780,32 @@ func linearProjectResolutionError(err error) error {
 	return linearAPIError("failed to resolve project", err)
 }
 
+func linearLabelResolutionError(err error) error {
+	var notFound *linear.LabelNotFoundError
+	if errors.As(err, &notFound) {
+		return &linearCommandError{Code: "label_not_found", Message: notFound.Error(), Err: err}
+	}
+	var ambiguous *linear.LabelAmbiguousError
+	if errors.As(err, &ambiguous) {
+		return &linearCommandError{
+			Code:            "ambiguous_label",
+			Message:         ambiguous.Error(),
+			LabelCandidates: ambiguous.Candidates,
+			Err:             err,
+		}
+	}
+	var group *linear.LabelGroupError
+	if errors.As(err, &group) {
+		return &linearCommandError{
+			Code:            "label_group",
+			Message:         group.Error(),
+			LabelCandidates: []linear.Label{group.Label},
+			Err:             err,
+		}
+	}
+	return linearAPIError("failed to resolve label", err)
+}
+
 func requireLinearAPIKey() error {
 	if os.Getenv("LINEAR_API_KEY") == "" {
 		return &linearCommandError{Code: "missing_configuration", Message: "LINEAR_API_KEY env var required"}
@@ -632,11 +849,18 @@ func newLinearCandidates(commandErr *linearCommandError) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	candidates := make([]any, 0, len(teamCandidates)+len(projectCandidates))
+	labelCandidates, err := newLinearLabelOutputs(commandErr.LabelCandidates)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]any, 0, len(teamCandidates)+len(projectCandidates)+len(labelCandidates))
 	for _, candidate := range teamCandidates {
 		candidates = append(candidates, candidate)
 	}
 	for _, candidate := range projectCandidates {
+		candidates = append(candidates, candidate)
+	}
+	for _, candidate := range labelCandidates {
 		candidates = append(candidates, candidate)
 	}
 	return candidates, nil
@@ -691,6 +915,20 @@ func newLinearTeamListOutput(page linear.TeamPage) (linearTeamListOutput, error)
 	}, nil
 }
 
+func newLinearLabelListOutput(page linear.LabelPage) (linearLabelListOutput, error) {
+	items, err := newLinearLabelOutputs(page.Items)
+	if err != nil {
+		return linearLabelListOutput{}, err
+	}
+	return linearLabelListOutput{
+		Items: items,
+		PageInfo: linearPageInfoOutput{
+			HasNextPage: page.PageInfo.HasNextPage,
+			NextCursor:  page.PageInfo.NextCursor,
+		},
+	}, nil
+}
+
 func newLinearTeamOutputs(teams []linear.Team) ([]linearTeamOutput, error) {
 	items := make([]linearTeamOutput, 0, len(teams))
 	for _, team := range teams {
@@ -729,6 +967,18 @@ func newLinearProjectOutputs(projects []linear.Project) ([]linearProjectOutput, 
 	return items, nil
 }
 
+func newLinearLabelOutputs(labels []linear.Label) ([]linearLabelOutput, error) {
+	items := make([]linearLabelOutput, 0, len(labels))
+	for _, label := range labels {
+		output, err := newLinearLabelOutput(label)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, output)
+	}
+	return items, nil
+}
+
 func newLinearTeamOutput(team linear.Team) (linearTeamOutput, error) {
 	id, ok := team.ID.(string)
 	if !ok || id == "" {
@@ -750,4 +1000,21 @@ func optionalLinearProject(project linearProjectOutput, ok bool) *linearProjectO
 		return nil
 	}
 	return &project
+}
+
+func newLinearLabelOutput(label linear.Label) (linearLabelOutput, error) {
+	id, ok := label.ID.(string)
+	if !ok || id == "" {
+		return linearLabelOutput{}, fmt.Errorf("label ID is not a string: %T", label.ID)
+	}
+	output := linearLabelOutput{ID: id, Name: string(label.Name), IsGroup: bool(label.IsGroup)}
+	if label.Team.ID == nil {
+		return output, nil
+	}
+	team, err := newLinearTeamOutput(label.Team)
+	if err != nil {
+		return linearLabelOutput{}, fmt.Errorf("label team: %w", err)
+	}
+	output.Team = &team
+	return output, nil
 }

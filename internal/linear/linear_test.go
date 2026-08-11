@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -26,6 +27,11 @@ const issueUpdateResponse = `{
     }
   }
 }`
+
+const (
+	labelPageLimit          = 2
+	remainingLabelPageLimit = 1
+)
 
 func TestClientUpdateIssueClearsDescription(t *testing.T) {
 	requestReceived := make(chan struct {
@@ -601,6 +607,193 @@ func TestClientResolveTeamReturnsTypedErrors(t *testing.T) {
 				if len(target.Candidates) != 2 {
 					t.Errorf("expected useful candidates, got %+v", target.Candidates)
 				}
+			}
+		})
+	}
+}
+
+func TestClientListLabelsPaginatesApplicableTeamAndWorkspaceLabels(t *testing.T) {
+	requests := make([]struct {
+		First int    `json:"first"`
+		After string `json:"after"`
+	}, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				First int    `json:"first"`
+				After string `json:"after"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests = append(requests, request.Variables)
+		response := `{
+			"data": {"issueLabels": {"nodes": [
+				{"id":"team-label","name":"Team","isGroup":false,"team":{"id":"team-one","key":"ONE","name":"One"}},
+				{"id":"other-label","name":"Other","isGroup":false,"team":{"id":"team-two","key":"TWO","name":"Two"}}
+			],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-one"}}}
+		}`
+		if len(requests) == labelPageLimit {
+			response = `{
+				"data": {"issueLabels": {"nodes": [
+					{"id":"workspace-label","name":"Workspace","isGroup":false,"team":null}
+				],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-two"}}}
+			}`
+		}
+		if _, err := w.Write([]byte(response)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	page, err := newClient("test-token", server.URL).ListLabels(
+		context.Background(),
+		"team-one",
+		LabelListRequest{Limit: labelPageLimit},
+	)
+	if err != nil {
+		t.Fatalf("list labels: %v", err)
+	}
+	if len(page.Items) != labelPageLimit || page.Items[0].ID != "team-label" ||
+		page.Items[1].ID != "workspace-label" {
+		t.Errorf("unexpected labels: %+v", page.Items)
+	}
+	if !page.PageInfo.HasNextPage || page.PageInfo.NextCursor != "cursor-two" {
+		t.Errorf("unexpected page info: %+v", page.PageInfo)
+	}
+	if len(requests) != labelPageLimit || requests[0].First != labelPageLimit || requests[0].After != "" ||
+		requests[1].First != remainingLabelPageLimit || requests[1].After != "cursor-one" {
+		t.Errorf("unexpected pagination requests: %+v", requests)
+	}
+}
+
+func TestClientResolveLabelRejectsAmbiguityAndGroups(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		wantType any
+	}{
+		{
+			name: "team and workspace name conflict",
+			response: `{
+				"data": {"issueLabels": {"nodes": [
+					{"id":"team-label","name":"Bug","isGroup":false,"team":{"id":"team-one","key":"ONE","name":"One"}},
+					{"id":"workspace-label","name":"Bug","isGroup":false,"team":null}
+				],"pageInfo":{"hasNextPage":false,"endCursor":""}}}
+			}`,
+			wantType: &LabelAmbiguousError{},
+		},
+		{
+			name: "label group",
+			response: `{
+				"data": {"issueLabels": {"nodes": [
+					{"id":"group-label","name":"Type","isGroup":true,"team":null}
+				],"pageInfo":{"hasNextPage":false,"endCursor":""}}}
+			}`,
+			wantType: &LabelGroupError{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer r.Body.Close()
+				var request struct {
+					Query string `json:"query"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decode request: %v", err)
+					return
+				}
+				if !strings.Contains(request.Query, "issueLabels(first: $first, after: $after, filter: $filter)") {
+					t.Errorf("unexpected label query: %s", request.Query)
+				}
+				if _, err := w.Write([]byte(tt.response)); err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			_, err := newClient("test-token", server.URL).ResolveLabel(
+				context.Background(),
+				"team-one",
+				"Bug",
+			)
+			if err == nil {
+				t.Fatal("expected resolution error")
+			}
+			switch tt.wantType.(type) {
+			case *LabelAmbiguousError:
+				var target *LabelAmbiguousError
+				if !errors.As(err, &target) || len(target.Candidates) != 2 {
+					t.Errorf("expected useful LabelAmbiguousError, got %v", err)
+				}
+			case *LabelGroupError:
+				var target *LabelGroupError
+				if !errors.As(err, &target) || target.Label.ID != "group-label" {
+					t.Errorf("expected LabelGroupError, got %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestClientUpdateIssuePatchesAndClearsLabels(t *testing.T) {
+	tests := []struct {
+		name  string
+		input UpdateIssueRequest
+		want  map[string]any
+	}{
+		{
+			name: "patches labels",
+			input: UpdateIssueRequest{
+				AddedLabelIDs:   []string{"label-add"},
+				RemovedLabelIDs: []string{"label-remove"},
+			},
+			want: map[string]any{
+				"addedLabelIds":   []any{"label-add"},
+				"removedLabelIds": []any{"label-remove"},
+			},
+		},
+		{
+			name:  "clears labels",
+			input: UpdateIssueRequest{ClearLabels: true},
+			want:  map[string]any{"labelIds": []any{}},
+		},
+	}
+
+	requests := make([]map[string]any, 0, len(tests))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				Input map[string]any `json:"input"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests = append(requests, request.Variables.Input)
+		if _, err := w.Write([]byte(issueUpdateResponse)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client := newClient("test-token", server.URL)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.UpdateIssue(context.Background(), "DEV-123", tt.input)
+			if err != nil {
+				t.Fatalf("update issue: %v", err)
+			}
+			got := requests[len(requests)-1]
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("expected mutation input %#v, got %#v", tt.want, got)
 			}
 		})
 	}

@@ -293,6 +293,19 @@ func Run(
 							},
 						},
 					},
+					{
+						Name:  "label",
+						Usage: "Discover applicable Linear issue labels",
+						Subcommands: []*cli.Command{
+							{
+								Name:         "list",
+								Usage:        "List workspace and team labels",
+								Flags:        linearLabelListFlags(),
+								OnUsageError: linearUsageError(stderr),
+								Action:       handleLinearLabelList(stdout, stderr),
+							},
+						},
+					},
 				},
 			},
 		},

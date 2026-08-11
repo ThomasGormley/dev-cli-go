@@ -16,8 +16,10 @@ const apiURL = "https://api.linear.app/graphql"
 type Clienter interface {
 	CreateIssue(ctx context.Context, input IssueCreateInput) (Issue, error)
 	GetIssue(ctx context.Context, id string) (Issue, error)
+	ListLabels(ctx context.Context, teamID string, request LabelListRequest) (LabelPage, error)
 	ListProjects(ctx context.Context, teamID string, request ProjectListRequest) (ProjectPage, error)
 	ListTeams(ctx context.Context, request TeamListRequest) (TeamPage, error)
+	ResolveLabel(ctx context.Context, teamID, selector string) (Label, error)
 	ResolveProject(ctx context.Context, teamID string, selector string) (Project, error)
 	ResolveTeam(ctx context.Context, selector string) (Team, error)
 	UpdateIssue(ctx context.Context, id string, input UpdateIssueRequest) (Issue, error)
@@ -123,6 +125,23 @@ type ProjectPage struct {
 	PageInfo PageInfo
 }
 
+type Label struct {
+	ID      graphql.ID      `graphql:"id"`
+	Name    graphql.String  `graphql:"name"`
+	IsGroup graphql.Boolean `graphql:"isGroup"`
+	Team    Team            `graphql:"team"`
+}
+
+type LabelListRequest struct {
+	Limit  int
+	Cursor string
+}
+
+type LabelPage struct {
+	Items    []Label
+	PageInfo PageInfo
+}
+
 type TeamNotFoundError struct {
 	Selector string
 }
@@ -134,6 +153,32 @@ func (e *TeamNotFoundError) Error() string {
 type TeamAmbiguousError struct {
 	Selector   string
 	Candidates []Team
+}
+
+type LabelNotFoundError struct {
+	Selector string
+}
+
+func (e *LabelNotFoundError) Error() string {
+	return fmt.Sprintf("no applicable label matches %q", e.Selector)
+}
+
+type LabelAmbiguousError struct {
+	Selector   string
+	Candidates []Label
+}
+
+func (e *LabelAmbiguousError) Error() string {
+	return fmt.Sprintf("multiple applicable labels match %q", e.Selector)
+}
+
+type LabelGroupError struct {
+	Selector string
+	Label    Label
+}
+
+func (e *LabelGroupError) Error() string {
+	return fmt.Sprintf("label group %q cannot be applied to an issue", e.Selector)
 }
 
 func (e *TeamAmbiguousError) Error() string {
@@ -165,6 +210,15 @@ type StringComparator struct {
 
 type TeamFilter struct {
 	Key  *StringComparator `json:"key,omitempty"`
+	Name *StringComparator `json:"name,omitempty"`
+}
+
+type IDComparator struct {
+	Eq *graphql.ID `json:"eq,omitempty"`
+}
+
+type IssueLabelFilter struct {
+	ID   *IDComparator     `json:"id,omitempty"`
 	Name *StringComparator `json:"name,omitempty"`
 }
 
@@ -200,6 +254,19 @@ type teamsQuery struct {
 
 type filteredTeamsQuery struct {
 	Teams teamConnection `graphql:"teams(first: $first, after: $after, filter: $filter)"`
+}
+
+type labelConnection struct {
+	Nodes    []Label         `graphql:"nodes"`
+	PageInfo graphqlPageInfo `graphql:"pageInfo"`
+}
+
+type labelsQuery struct {
+	IssueLabels labelConnection `graphql:"issueLabels(first: $first, after: $after)"`
+}
+
+type filteredLabelsQuery struct {
+	IssueLabels labelConnection `graphql:"issueLabels(first: $first, after: $after, filter: $filter)"`
 }
 
 type teamByIDQuery struct {
@@ -282,6 +349,36 @@ func (c *Client) ListProjects(ctx context.Context, teamID string, request Projec
 	return ProjectPage{Items: items, PageInfo: pageInfo}, nil
 }
 
+func (c *Client) ListLabels(ctx context.Context, teamID string, request LabelListRequest) (LabelPage, error) {
+	if teamID == "" {
+		return LabelPage{}, errors.New("label list team ID required")
+	}
+	if request.Limit < 1 {
+		return LabelPage{}, errors.New("label list limit must be greater than zero")
+	}
+
+	items := []Label{}
+	cursor := request.Cursor
+	pageInfo := PageInfo{}
+	for len(items) < request.Limit {
+		connection, err := c.queryLabels(ctx, request.Limit-len(items), cursor)
+		if err != nil {
+			return LabelPage{}, &APIError{Operation: "list labels", Err: err}
+		}
+		for _, label := range connection.Nodes {
+			if len(items) < request.Limit && isApplicableLabel(label, teamID) {
+				items = append(items, label)
+			}
+		}
+		pageInfo = newPageInfo(connection.PageInfo)
+		if !pageInfo.HasNextPage {
+			break
+		}
+		cursor = pageInfo.NextCursor
+	}
+	return LabelPage{Items: items, PageInfo: pageInfo}, nil
+}
+
 func (c *Client) ResolveTeam(ctx context.Context, selector string) (Team, error) {
 	if selector == "" {
 		return Team{}, &TeamNotFoundError{Selector: selector}
@@ -337,6 +434,26 @@ func (c *Client) ResolveProject(ctx context.Context, teamID string, selector str
 	return exactlyOneProject(teamID, selector, candidates)
 }
 
+func (c *Client) ResolveLabel(ctx context.Context, teamID, selector string) (Label, error) {
+	if teamID == "" || selector == "" {
+		return Label{}, &LabelNotFoundError{Selector: selector}
+	}
+	if isUUID(selector) {
+		idMatches, err := c.queryLabelsByFilter(ctx, teamID, IssueLabelFilter{ID: exactIDComparator(selector)})
+		if err != nil {
+			return Label{}, &APIError{Operation: "resolve label", Err: err}
+		}
+		if len(idMatches) > 0 {
+			return exactlyOneLabel(selector, idMatches)
+		}
+	}
+	nameMatches, err := c.queryLabelsByFilter(ctx, teamID, IssueLabelFilter{Name: exactComparator(selector)})
+	if err != nil {
+		return Label{}, &APIError{Operation: "resolve label", Err: err}
+	}
+	return exactlyOneLabel(selector, nameMatches)
+}
+
 func (c *Client) queryTeams(ctx context.Context, limit int, cursor string) (teamConnection, error) {
 	var query teamsQuery
 	variables := map[string]any{
@@ -367,6 +484,18 @@ func (c *Client) queryTeamProjects(
 	return query.Team.Projects, nil
 }
 
+func (c *Client) queryLabels(ctx context.Context, limit int, cursor string) (labelConnection, error) {
+	var query labelsQuery
+	variables := map[string]any{
+		"first": graphql.Int(limit),
+		"after": newCursor(cursor),
+	}
+	if err := c.client.Query(ctx, &query, variables); err != nil {
+		return labelConnection{}, err
+	}
+	return query.IssueLabels, nil
+}
+
 func (c *Client) queryTeamsByFilter(ctx context.Context, filter TeamFilter) ([]Team, error) {
 	items := []Team{}
 	cursor := ""
@@ -386,6 +515,36 @@ func (c *Client) queryTeamsByFilter(ctx context.Context, filter TeamFilter) ([]T
 			}
 		}
 		pageInfo := newPageInfo(query.Teams.PageInfo)
+		if !pageInfo.HasNextPage {
+			return items, nil
+		}
+		cursor = pageInfo.NextCursor
+	}
+}
+
+func (c *Client) queryLabelsByFilter(
+	ctx context.Context,
+	teamID string,
+	filter IssueLabelFilter,
+) ([]Label, error) {
+	items := []Label{}
+	cursor := ""
+	for {
+		var query filteredLabelsQuery
+		variables := map[string]any{
+			"first":  graphql.Int(50),
+			"after":  newCursor(cursor),
+			"filter": filter,
+		}
+		if err := c.client.Query(ctx, &query, variables); err != nil {
+			return nil, err
+		}
+		for _, label := range query.IssueLabels.Nodes {
+			if isApplicableLabel(label, teamID) {
+				items = append(items, label)
+			}
+		}
+		pageInfo := newPageInfo(query.IssueLabels.PageInfo)
 		if !pageInfo.HasNextPage {
 			return items, nil
 		}
@@ -424,9 +583,28 @@ func exactlyOneProject(teamID string, selector string, candidates []Project) (Pr
 	}
 }
 
+func exactlyOneLabel(selector string, candidates []Label) (Label, error) {
+	switch len(candidates) {
+	case 0:
+		return Label{}, &LabelNotFoundError{Selector: selector}
+	case 1:
+		if candidates[0].IsGroup {
+			return Label{}, &LabelGroupError{Selector: selector, Label: candidates[0]}
+		}
+		return candidates[0], nil
+	default:
+		return Label{}, &LabelAmbiguousError{Selector: selector, Candidates: candidates}
+	}
+}
+
 func exactComparator(value string) *StringComparator {
 	selector := graphql.String(value)
 	return &StringComparator{EqIgnoreCase: &selector}
+}
+
+func exactIDComparator(value string) *IDComparator {
+	selector := graphql.ID(value)
+	return &IDComparator{Eq: &selector}
 }
 
 func newCursor(cursor string) *graphql.String {
@@ -455,6 +633,17 @@ func projectMatchesSelector(project Project, selector string) bool {
 		return ok && id == selector
 	}
 	return string(project.SlugID) == selector || strings.EqualFold(string(project.Name), selector)
+}
+
+func isApplicableLabel(label Label, teamID string) bool {
+	if label.ID == nil {
+		return false
+	}
+	if label.Team.ID == nil {
+		return true
+	}
+	labelTeamID, ok := label.Team.ID.(string)
+	return ok && labelTeamID == teamID
 }
 
 func isUUID(value string) bool {
@@ -488,10 +677,11 @@ type IssuePayload struct {
 }
 
 type IssueCreateInput struct {
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	TeamID      string `json:"teamId"`
-	ProjectID   string `json:"projectId,omitempty"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	TeamID      string   `json:"teamId"`
+	ProjectID   string   `json:"projectId,omitempty"`
+	LabelIDs    []string `json:"labelIds,omitempty"`
 }
 
 type UpdateIssueRequest struct {
@@ -500,6 +690,9 @@ type UpdateIssueRequest struct {
 	ClearDescription bool
 	ProjectID        *string
 	ClearProject     bool
+	AddedLabelIDs    []string
+	RemovedLabelIDs  []string
+	ClearLabels      bool
 }
 
 func (i UpdateIssueRequest) MarshalJSON() ([]byte, error) {
@@ -518,6 +711,15 @@ func (i UpdateIssueRequest) MarshalJSON() ([]byte, error) {
 	}
 	if i.ClearProject {
 		input["projectId"] = nil
+	}
+	if len(i.AddedLabelIDs) > 0 {
+		input["addedLabelIds"] = i.AddedLabelIDs
+	}
+	if len(i.RemovedLabelIDs) > 0 {
+		input["removedLabelIds"] = i.RemovedLabelIDs
+	}
+	if i.ClearLabels {
+		input["labelIds"] = []string{}
 	}
 	return json.Marshal(input)
 }
@@ -545,11 +747,14 @@ func (s nullableString) MarshalJSON() ([]byte, error) {
 }
 
 type IssueUpdateInput struct {
-	Title       *graphql.String `json:"title,omitempty"`
-	Description *nullableString `json:"description,omitempty"`
-	ProjectID   *nullableID     `json:"projectId,omitempty"`
-	AssigneeID  graphql.ID      `json:"assigneeId,omitempty"`
-	StateID     graphql.ID      `json:"stateId,omitempty"`
+	Title           *graphql.String `json:"title,omitempty"`
+	Description     *nullableString `json:"description,omitempty"`
+	ProjectID       *nullableID     `json:"projectId,omitempty"`
+	AssigneeID      graphql.ID      `json:"assigneeId,omitempty"`
+	StateID         graphql.ID      `json:"stateId,omitempty"`
+	AddedLabelIDs   []graphql.ID    `json:"addedLabelIds,omitempty"`
+	RemovedLabelIDs []graphql.ID    `json:"removedLabelIds,omitempty"`
+	LabelIDs        *[]graphql.ID   `json:"labelIds,omitempty"`
 }
 
 type IssueCreateMutation struct {
@@ -713,5 +918,22 @@ func newIssueUpdateInput(input UpdateIssueRequest) IssueUpdateInput {
 	if input.ClearProject {
 		output.ProjectID = &nullableID{}
 	}
+	output.AddedLabelIDs = newGraphQLIDs(input.AddedLabelIDs)
+	output.RemovedLabelIDs = newGraphQLIDs(input.RemovedLabelIDs)
+	if input.ClearLabels {
+		labelIDs := []graphql.ID{}
+		output.LabelIDs = &labelIDs
+	}
 	return output
+}
+
+func newGraphQLIDs(values []string) []graphql.ID {
+	if len(values) == 0 {
+		return nil
+	}
+	ids := make([]graphql.ID, 0, len(values))
+	for _, value := range values {
+		ids = append(ids, graphql.ID(value))
+	}
+	return ids
 }
