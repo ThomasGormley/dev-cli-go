@@ -243,45 +243,90 @@ func Run(
 			{
 				Name:        "linear",
 				Usage:       "Linear issue management",
-				Description: "Create, view, and update Linear issues",
+				Description: "JSON-first Linear issue management using exact selectors; discover values with list commands",
 				Subcommands: []*cli.Command{
 					{
-						Name:  "create",
-						Usage: "Create a new Linear issue",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:     "title",
-								Usage:    "title of the issue",
-								Required: true,
-							},
-							&cli.StringFlag{
-								Name:  "description",
-								Usage: "description of the issue",
-							},
-						},
-						Action: handleLinearCreate(stdout, stderr),
+						Name:         "create",
+						Usage:        "Create a new Linear issue",
+						Flags:        linearCreateFlags(),
+						OnUsageError: linearUsageError(stderr),
+						Action:       handleLinearCreate(stdout, stderr, os.Stdin),
 					},
 					{
-						Name:      "get",
-						Usage:     "Get an issue by ID",
-						ArgsUsage: "<issue-id>",
-						Action:    handleLinearGet(stdout, stderr),
+						Name:         "get",
+						Usage:        "Get an issue by ID",
+						ArgsUsage:    "<issue-id>",
+						OnUsageError: linearUsageError(stderr),
+						Action:       handleLinearGet(stdout, stderr),
 					},
 					{
-						Name:      "update",
-						Usage:     "Update an issue",
-						ArgsUsage: "<issue-id>",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:  "title",
-								Usage: "title of the issue",
-							},
-							&cli.StringFlag{
-								Name:  "description",
-								Usage: "description of the issue",
+						Name:         "update",
+						Usage:        "Update an issue",
+						ArgsUsage:    "<issue-id>",
+						Flags:        linearUpdateFlags(),
+						OnUsageError: linearUsageError(stderr),
+						Action:       handleLinearUpdate(stdout, stderr, os.Stdin),
+					},
+					{
+						Name:  "team",
+						Usage: "Discover accessible Linear teams",
+						Subcommands: []*cli.Command{
+							{
+								Name:         "list",
+								Usage:        "List active accessible teams",
+								Flags:        linearTeamListFlags(),
+								OnUsageError: linearUsageError(stderr),
+								Action:       handleLinearTeamList(stdout, stderr),
 							},
 						},
-						Action: handleLinearUpdate(stdout, stderr),
+					},
+					{
+						Name:  "project",
+						Usage: "Discover accessible Linear projects",
+						Subcommands: []*cli.Command{
+							{
+								Name:         "list",
+								Usage:        "List active accessible projects for a team",
+								Flags:        linearProjectListFlags(),
+								OnUsageError: linearUsageError(stderr),
+								Action:       handleLinearProjectList(stdout, stderr),
+							},
+						},
+					},
+					{
+						Name:  "label",
+						Usage: "Discover applicable Linear issue labels",
+						Subcommands: []*cli.Command{{
+							Name:         "list",
+							Usage:        "List workspace and team labels",
+							Flags:        linearLabelListFlags(),
+							OnUsageError: linearUsageError(stderr),
+							Action:       handleLinearLabelList(stdout, stderr),
+						}},
+					},
+					{
+						Name:  "milestone",
+						Usage: "Discover Linear project milestones",
+						Subcommands: []*cli.Command{{
+							Name:         "list",
+							Usage:        "List project milestones",
+							Flags:        linearProjectMilestoneListFlags(),
+							OnUsageError: linearUsageError(stderr),
+							Action:       handleLinearProjectMilestoneList(stdout, stderr),
+						}},
+					},
+					{
+						Name:  "user",
+						Usage: "Discover active Linear team members",
+						Subcommands: []*cli.Command{
+							{
+								Name:         "list",
+								Usage:        "List active members of a Linear team",
+								Flags:        linearUserListFlags(),
+								OnUsageError: linearUsageError(stderr),
+								Action:       handleLinearUserList(stdout, stderr),
+							},
+						},
 					},
 				},
 			},
