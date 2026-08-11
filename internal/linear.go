@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,9 +13,10 @@ import (
 )
 
 type linearCommandError struct {
-	Code    string
-	Message string
-	Err     error
+	Code       string
+	Message    string
+	Candidates []linear.Team
+	Err        error
 }
 
 func (e *linearCommandError) Error() string {
@@ -27,23 +29,46 @@ func (e *linearCommandError) Unwrap() error {
 
 type linearErrorOutput struct {
 	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Code       string             `json:"code"`
+		Message    string             `json:"message"`
+		Candidates []linearTeamOutput `json:"candidates,omitempty"`
 	} `json:"error"`
 }
 
+type linearTeamOutput struct {
+	ID   string `json:"id"`
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
+type linearPageInfoOutput struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	NextCursor  string `json:"nextCursor"`
+}
+
+type linearTeamListOutput struct {
+	Items    []linearTeamOutput   `json:"items"`
+	PageInfo linearPageInfoOutput `json:"pageInfo"`
+}
+
 type linearIssueOutput struct {
-	ID          string `json:"id"`
-	Identifier  string `json:"identifier"`
-	URL         string `json:"url"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
+	ID          string           `json:"id"`
+	Identifier  string           `json:"identifier"`
+	URL         string           `json:"url"`
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	Team        linearTeamOutput `json:"team"`
 }
 
 type linearDryRunOutput struct {
 	DryRun    bool   `json:"dryRun"`
 	Operation string `json:"operation"`
 	Input     any    `json:"input"`
+	Resolved  any    `json:"resolved,omitempty"`
+}
+
+type linearCreateResolvedOutput struct {
+	Team linearTeamOutput `json:"team"`
 }
 
 type linearUpdateDryRunInput struct {
@@ -74,8 +99,16 @@ var newLinearClient = func() linear.Clienter {
 
 func linearCreateFlags() []cli.Flag {
 	return append(linearMutationFlags(),
+		&cli.StringFlag{Name: "team", Usage: "team UUID, key, or exact name"},
 		&cli.BoolFlag{Name: "dry-run", Usage: "validate and print the mutation input without creating an issue"},
 	)
+}
+
+func linearTeamListFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.IntFlag{Name: "limit", Value: 50, Usage: "maximum number of teams to return"},
+		&cli.StringFlag{Name: "cursor", Usage: "cursor from a previous team list response"},
+	}
 }
 
 func linearUpdateFlags() []cli.Flag {
@@ -110,24 +143,65 @@ func handleLinearCreate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		if err != nil {
 			return exitLinearError(stderr, err)
 		}
-		teamID, err := linearTeamID()
-		if err != nil {
-			return exitLinearError(stderr, err)
-		}
 		if err := requireLinearAPIKey(); err != nil {
 			return exitLinearError(stderr, err)
 		}
+		selector, err := linearTeamSelector(c)
+		if err != nil {
+			return exitLinearError(stderr, err)
+		}
+		team, err := newLinearClient().ResolveTeam(c.Context, selector)
+		if err != nil {
+			return exitLinearError(stderr, linearTeamResolutionError(err))
+		}
+		resolvedTeam, err := newLinearTeamOutput(team)
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("invalid resolved team", err))
+		}
 
-		input := linear.IssueCreateInput{Title: title, Description: description, TeamID: teamID}
+		input := linear.IssueCreateInput{Title: title, Description: description, TeamID: resolvedTeam.ID}
 		if c.Bool("dry-run") {
-			return writeLinearJSON(stdout, linearDryRunOutput{DryRun: true, Operation: "create", Input: input})
+			return writeLinearJSON(stdout, linearDryRunOutput{
+				DryRun:    true,
+				Operation: "create",
+				Input:     input,
+				Resolved:  linearCreateResolvedOutput{Team: resolvedTeam},
+			})
 		}
 
 		issue, err := newLinearClient().CreateIssue(c.Context, input)
 		if err != nil {
 			return exitLinearError(stderr, linearAPIError("failed to create issue", err))
 		}
-		return writeLinearJSON(stdout, newLinearIssueOutput(issue))
+		output, err := newLinearIssueOutput(issue, resolvedTeam)
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("invalid created issue", err))
+		}
+		return writeLinearJSON(stdout, output)
+	}
+}
+
+func handleLinearTeamList(stdout, stderr io.Writer) cli.ActionFunc {
+	return func(c *cli.Context) error {
+		if err := requireLinearAPIKey(); err != nil {
+			return exitLinearError(stderr, err)
+		}
+		limit := c.Int("limit")
+		if limit < 1 {
+			return exitLinearError(stderr, invalidLinearArguments("--limit must be greater than zero"))
+		}
+		page, err := newLinearClient().ListTeams(c.Context, linear.TeamListRequest{
+			Limit:  limit,
+			Cursor: c.String("cursor"),
+		})
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("failed to list teams", err))
+		}
+		output, err := newLinearTeamListOutput(page)
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("invalid team list response", err))
+		}
+		return writeLinearJSON(stdout, output)
 	}
 }
 
@@ -145,7 +219,15 @@ func handleLinearGet(stdout, stderr io.Writer) cli.ActionFunc {
 		if err != nil {
 			return exitLinearError(stderr, linearAPIError("failed to get issue", err))
 		}
-		return writeLinearJSON(stdout, newLinearIssueOutput(issue))
+		team, err := newLinearTeamOutput(issue.Team)
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("invalid issue response", err))
+		}
+		output, err := newLinearIssueOutput(issue, team)
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("invalid issue response", err))
+		}
+		return writeLinearJSON(stdout, output)
 	}
 }
 
@@ -175,7 +257,15 @@ func handleLinearUpdate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		if err != nil {
 			return exitLinearError(stderr, linearAPIError("failed to update issue", err))
 		}
-		return writeLinearJSON(stdout, newLinearIssueOutput(issue))
+		team, err := newLinearTeamOutput(issue.Team)
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("invalid issue response", err))
+		}
+		output, err := newLinearIssueOutput(issue, team)
+		if err != nil {
+			return exitLinearError(stderr, linearAPIError("invalid issue response", err))
+		}
+		return writeLinearJSON(stdout, output)
 	}
 }
 
@@ -246,12 +336,36 @@ func linearIssueID(c *cli.Context) (string, error) {
 	return c.Args().First(), nil
 }
 
-func linearTeamID() (string, error) {
-	teamID := os.Getenv("LINEAR_TEAM_ID")
-	if teamID == "" {
-		return "", &linearCommandError{Code: "missing_configuration", Message: "LINEAR_TEAM_ID env var required"}
+func linearTeamSelector(c *cli.Context) (string, error) {
+	if c.IsSet("team") {
+		selector := c.String("team")
+		if selector == "" {
+			return "", invalidLinearArguments("--team cannot be empty")
+		}
+		return selector, nil
 	}
-	return teamID, nil
+	selector := os.Getenv("LINEAR_TEAM_ID")
+	if selector == "" {
+		return "", &linearCommandError{Code: "missing_configuration", Message: "--team or LINEAR_TEAM_ID required"}
+	}
+	return selector, nil
+}
+
+func linearTeamResolutionError(err error) error {
+	var notFound *linear.TeamNotFoundError
+	if errors.As(err, &notFound) {
+		return &linearCommandError{Code: "team_not_found", Message: notFound.Error(), Err: err}
+	}
+	var ambiguous *linear.TeamAmbiguousError
+	if errors.As(err, &ambiguous) {
+		return &linearCommandError{
+			Code:       "ambiguous_team",
+			Message:    ambiguous.Error(),
+			Candidates: ambiguous.Candidates,
+			Err:        err,
+		}
+	}
+	return linearAPIError("failed to resolve team", err)
 }
 
 func requireLinearAPIKey() error {
@@ -274,10 +388,15 @@ func exitLinearError(stderr io.Writer, err error) error {
 	if !ok {
 		commandErr = &linearCommandError{Code: "internal_error", Message: "Linear command failed", Err: err}
 	}
-	if writeErr := writeLinearJSON(stderr, linearErrorOutput{Error: struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	}{Code: commandErr.Code, Message: commandErr.Message}}); writeErr != nil {
+	output := linearErrorOutput{}
+	output.Error.Code = commandErr.Code
+	output.Error.Message = commandErr.Message
+	candidates, candidateErr := newLinearTeamOutputs(commandErr.Candidates)
+	if candidateErr != nil {
+		return cli.Exit(fmt.Errorf("encode Linear error candidates: %w", candidateErr), 1)
+	}
+	output.Error.Candidates = candidates
+	if writeErr := writeLinearJSON(stderr, output); writeErr != nil {
 		return cli.Exit(fmt.Errorf("write Linear error response: %w", writeErr), 1)
 	}
 	return cli.Exit("", 1)
@@ -290,12 +409,51 @@ func writeLinearJSON(writer io.Writer, value any) error {
 	return nil
 }
 
-func newLinearIssueOutput(issue linear.Issue) linearIssueOutput {
+func newLinearIssueOutput(issue linear.Issue, team linearTeamOutput) (linearIssueOutput, error) {
+	id, ok := issue.ID.(string)
+	if !ok || id == "" {
+		return linearIssueOutput{}, fmt.Errorf("issue ID is not a string: %T", issue.ID)
+	}
 	return linearIssueOutput{
-		ID:          issue.ID.(string),
+		ID:          id,
 		Identifier:  string(issue.Identifier),
 		URL:         string(issue.URL),
 		Title:       string(issue.Title),
 		Description: string(issue.Description),
+		Team:        team,
+	}, nil
+}
+
+func newLinearTeamListOutput(page linear.TeamPage) (linearTeamListOutput, error) {
+	items, err := newLinearTeamOutputs(page.Items)
+	if err != nil {
+		return linearTeamListOutput{}, err
 	}
+	return linearTeamListOutput{
+		Items: items,
+		PageInfo: linearPageInfoOutput{
+			HasNextPage: page.PageInfo.HasNextPage,
+			NextCursor:  page.PageInfo.NextCursor,
+		},
+	}, nil
+}
+
+func newLinearTeamOutputs(teams []linear.Team) ([]linearTeamOutput, error) {
+	items := make([]linearTeamOutput, 0, len(teams))
+	for _, team := range teams {
+		output, err := newLinearTeamOutput(team)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, output)
+	}
+	return items, nil
+}
+
+func newLinearTeamOutput(team linear.Team) (linearTeamOutput, error) {
+	id, ok := team.ID.(string)
+	if !ok || id == "" {
+		return linearTeamOutput{}, fmt.Errorf("team ID is not a string: %T", team.ID)
+	}
+	return linearTeamOutput{ID: id, Key: string(team.Key), Name: string(team.Name)}, nil
 }

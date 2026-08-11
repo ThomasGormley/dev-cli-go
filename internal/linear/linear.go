@@ -15,6 +15,8 @@ const apiURL = "https://api.linear.app/graphql"
 type Clienter interface {
 	CreateIssue(ctx context.Context, input IssueCreateInput) (Issue, error)
 	GetIssue(ctx context.Context, id string) (Issue, error)
+	ListTeams(ctx context.Context, request TeamListRequest) (TeamPage, error)
+	ResolveTeam(ctx context.Context, selector string) (Team, error)
 	UpdateIssue(ctx context.Context, id string, input UpdateIssueRequest) (Issue, error)
 }
 
@@ -79,7 +81,51 @@ type User struct {
 }
 
 type Team struct {
-	ID graphql.ID `graphql:"id"`
+	ID        graphql.ID     `graphql:"id"`
+	Key       graphql.String `graphql:"key"`
+	Name      graphql.String `graphql:"name"`
+	RetiredAt graphql.String `graphql:"retiredAt"`
+}
+
+type PageInfo struct {
+	HasNextPage bool
+	NextCursor  string
+}
+
+type TeamListRequest struct {
+	Limit  int
+	Cursor string
+}
+
+type TeamPage struct {
+	Items    []Team
+	PageInfo PageInfo
+}
+
+type TeamNotFoundError struct {
+	Selector string
+}
+
+func (e *TeamNotFoundError) Error() string {
+	return fmt.Sprintf("no active team matches %q", e.Selector)
+}
+
+type TeamAmbiguousError struct {
+	Selector   string
+	Candidates []Team
+}
+
+func (e *TeamAmbiguousError) Error() string {
+	return fmt.Sprintf("multiple active teams match %q", e.Selector)
+}
+
+type StringComparator struct {
+	EqIgnoreCase *graphql.String `json:"eqIgnoreCase,omitempty"`
+}
+
+type TeamFilter struct {
+	Key  *StringComparator `json:"key,omitempty"`
+	Name *StringComparator `json:"name,omitempty"`
 }
 
 type WorkflowState struct {
@@ -91,6 +137,28 @@ type WorkflowState struct {
 // Query struct for getting an issue
 type GetIssueQuery struct {
 	Issue Issue `graphql:"issue(id: $id)"`
+}
+
+type teamConnection struct {
+	Nodes    []Team          `graphql:"nodes"`
+	PageInfo graphqlPageInfo `graphql:"pageInfo"`
+}
+
+type graphqlPageInfo struct {
+	HasNextPage graphql.Boolean `graphql:"hasNextPage"`
+	EndCursor   graphql.String  `graphql:"endCursor"`
+}
+
+type teamsQuery struct {
+	Teams teamConnection `graphql:"teams(first: $first, after: $after)"`
+}
+
+type filteredTeamsQuery struct {
+	Teams teamConnection `graphql:"teams(first: $first, after: $after, filter: $filter)"`
+}
+
+type teamByIDQuery struct {
+	Team Team `graphql:"team(id: $id)"`
 }
 
 // RPC-style method to get issue information
@@ -107,6 +175,160 @@ func (c *Client) GetIssue(ctx context.Context, id string) (Issue, error) {
 		return Issue{}, &APIError{Operation: "get issue", Err: errors.New("issue not found")}
 	}
 	return q.Issue, nil
+}
+
+func (c *Client) ListTeams(ctx context.Context, request TeamListRequest) (TeamPage, error) {
+	if request.Limit < 1 {
+		return TeamPage{}, errors.New("team list limit must be greater than zero")
+	}
+
+	items := []Team{}
+	cursor := request.Cursor
+	pageInfo := PageInfo{}
+	for len(items) < request.Limit {
+		connection, err := c.queryTeams(ctx, request.Limit-len(items), cursor)
+		if err != nil {
+			return TeamPage{}, &APIError{Operation: "list teams", Err: err}
+		}
+		for _, team := range connection.Nodes {
+			if len(items) < request.Limit && isActiveTeam(team) {
+				items = append(items, team)
+			}
+		}
+		pageInfo = newPageInfo(connection.PageInfo)
+		if !pageInfo.HasNextPage {
+			break
+		}
+		cursor = pageInfo.NextCursor
+	}
+	return TeamPage{Items: items, PageInfo: pageInfo}, nil
+}
+
+func (c *Client) ResolveTeam(ctx context.Context, selector string) (Team, error) {
+	if selector == "" {
+		return Team{}, &TeamNotFoundError{Selector: selector}
+	}
+	if isUUID(selector) {
+		team, err := c.queryTeamByID(ctx, selector)
+		if err != nil {
+			return Team{}, &APIError{Operation: "resolve team", Err: err}
+		}
+		if isActiveTeam(team) {
+			return team, nil
+		}
+	}
+
+	keyMatches, err := c.queryTeamsByFilter(ctx, TeamFilter{Key: exactComparator(selector)})
+	if err != nil {
+		return Team{}, &APIError{Operation: "resolve team", Err: err}
+	}
+	if len(keyMatches) > 0 {
+		return exactlyOneTeam(selector, keyMatches)
+	}
+
+	nameMatches, err := c.queryTeamsByFilter(ctx, TeamFilter{Name: exactComparator(selector)})
+	if err != nil {
+		return Team{}, &APIError{Operation: "resolve team", Err: err}
+	}
+	return exactlyOneTeam(selector, nameMatches)
+}
+
+func (c *Client) queryTeams(ctx context.Context, limit int, cursor string) (teamConnection, error) {
+	var query teamsQuery
+	variables := map[string]any{
+		"first": graphql.Int(limit),
+		"after": newCursor(cursor),
+	}
+	if err := c.client.Query(ctx, &query, variables); err != nil {
+		return teamConnection{}, err
+	}
+	return query.Teams, nil
+}
+
+func (c *Client) queryTeamsByFilter(ctx context.Context, filter TeamFilter) ([]Team, error) {
+	items := []Team{}
+	cursor := ""
+	for {
+		var query filteredTeamsQuery
+		variables := map[string]any{
+			"first":  graphql.Int(50),
+			"after":  newCursor(cursor),
+			"filter": filter,
+		}
+		if err := c.client.Query(ctx, &query, variables); err != nil {
+			return nil, err
+		}
+		for _, team := range query.Teams.Nodes {
+			if isActiveTeam(team) {
+				items = append(items, team)
+			}
+		}
+		pageInfo := newPageInfo(query.Teams.PageInfo)
+		if !pageInfo.HasNextPage {
+			return items, nil
+		}
+		cursor = pageInfo.NextCursor
+	}
+}
+
+func (c *Client) queryTeamByID(ctx context.Context, id string) (Team, error) {
+	var query teamByIDQuery
+	variables := map[string]any{"id": graphql.ID(id)}
+	if err := c.client.Query(ctx, &query, variables); err != nil {
+		return Team{}, err
+	}
+	return query.Team, nil
+}
+
+func exactlyOneTeam(selector string, candidates []Team) (Team, error) {
+	switch len(candidates) {
+	case 0:
+		return Team{}, &TeamNotFoundError{Selector: selector}
+	case 1:
+		return candidates[0], nil
+	default:
+		return Team{}, &TeamAmbiguousError{Selector: selector, Candidates: candidates}
+	}
+}
+
+func exactComparator(value string) *StringComparator {
+	selector := graphql.String(value)
+	return &StringComparator{EqIgnoreCase: &selector}
+}
+
+func newCursor(cursor string) *graphql.String {
+	if cursor == "" {
+		return nil
+	}
+	value := graphql.String(cursor)
+	return &value
+}
+
+func newPageInfo(pageInfo graphqlPageInfo) PageInfo {
+	return PageInfo{HasNextPage: bool(pageInfo.HasNextPage), NextCursor: string(pageInfo.EndCursor)}
+}
+
+func isActiveTeam(team Team) bool {
+	return team.ID != nil && team.RetiredAt == ""
+}
+
+func isUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index, character := range value {
+		switch {
+		case index == 8 || index == 13 || index == 18 || index == 23:
+			if character != '-' {
+				return false
+			}
+		case (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') ||
+			(character >= 'A' && character <= 'F'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Query struct for getting current user

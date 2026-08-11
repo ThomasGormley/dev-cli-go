@@ -267,6 +267,19 @@ func Run(
 						OnUsageError: linearUsageError(stderr),
 						Action:       handleLinearUpdate(stdout, stderr, os.Stdin),
 					},
+					{
+						Name:  "team",
+						Usage: "Discover accessible Linear teams",
+						Subcommands: []*cli.Command{
+							{
+								Name:         "list",
+								Usage:        "List active accessible teams",
+								Flags:        linearTeamListFlags(),
+								OnUsageError: linearUsageError(stderr),
+								Action:       handleLinearTeamList(stdout, stderr),
+							},
+						},
+					},
 				},
 			},
 		},

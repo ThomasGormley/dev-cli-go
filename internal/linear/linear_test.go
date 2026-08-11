@@ -3,8 +3,10 @@ package linear
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -145,6 +147,195 @@ func TestClientRejectsMissingIssueAndUnsuccessfulMutations(t *testing.T) {
 			}
 			if _, ok := err.(*APIError); !ok {
 				t.Errorf("expected APIError, got %T", err)
+			}
+		})
+	}
+}
+
+func TestClientListTeamsPaginatesAndExcludesRetiredTeams(t *testing.T) {
+	requests := make([]struct {
+		First int    `json:"first"`
+		After string `json:"after"`
+	}, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				First int    `json:"first"`
+				After string `json:"after"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests = append(requests, request.Variables)
+		response := `{"data":{"teams":{"nodes":[{"id":"team-one","key":"ONE","name":"One","retiredAt":null},{"id":"team-retired","key":"OLD","name":"Old","retiredAt":"2025-01-01"}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-one"}}}}`
+		if len(requests) == 2 {
+			response = `{"data":{"teams":{"nodes":[{"id":"team-two","key":"TWO","name":"Two","retiredAt":null}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-two"}}}}`
+		}
+		if _, err := w.Write([]byte(response)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	page, err := newClient("test-token", server.URL).ListTeams(context.Background(), TeamListRequest{Limit: 2})
+	if err != nil {
+		t.Fatalf("list teams: %v", err)
+	}
+	if len(page.Items) != 2 || string(page.Items[0].ID.(string)) != "team-one" ||
+		string(page.Items[1].ID.(string)) != "team-two" {
+		t.Errorf("unexpected teams: %+v", page.Items)
+	}
+	if !page.PageInfo.HasNextPage || page.PageInfo.NextCursor != "cursor-two" {
+		t.Errorf("unexpected page info: %+v", page.PageInfo)
+	}
+	if len(requests) != 2 || requests[0].First != 2 || requests[0].After != "" ||
+		requests[1].First != 1 || requests[1].After != "cursor-one" {
+		t.Errorf("unexpected pagination requests: %+v", requests)
+	}
+}
+
+func TestClientResolveTeamUsesKeyBeforeExactName(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string `json:"query"`
+			Variables struct {
+				Filter struct {
+					Key struct {
+						EqIgnoreCase string `json:"eqIgnoreCase"`
+					} `json:"key"`
+				} `json:"filter"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests++
+		if !strings.Contains(request.Query, "teams(first: $first, after: $after, filter: $filter)") {
+			t.Errorf("unexpected query: %s", request.Query)
+		}
+		if request.Variables.Filter.Key.EqIgnoreCase != "platform" {
+			t.Errorf("expected exact key selector, got %+v", request.Variables.Filter)
+		}
+		_, err := w.Write([]byte(`{"data":{"teams":{"nodes":[{"id":"team-uuid","key":"PLATFORM","name":"Platform","retiredAt":null}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`))
+		if err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	team, err := newClient("test-token", server.URL).ResolveTeam(context.Background(), "platform")
+	if err != nil {
+		t.Fatalf("resolve team: %v", err)
+	}
+	if team.ID != "team-uuid" || team.Key != "PLATFORM" || team.Name != "Platform" {
+		t.Errorf("unexpected team: %+v", team)
+	}
+	if requests != 1 {
+		t.Errorf("expected one key query, got %d", requests)
+	}
+}
+
+func TestClientResolveTeamFallsBackFromMissingUUIDToExactName(t *testing.T) {
+	const selector = "11111111-1111-1111-1111-111111111111"
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests++
+		response := `{"data":{"team":null}}`
+		switch requests {
+		case 2:
+			if !strings.Contains(request.Query, "filter: $filter") {
+				t.Errorf("expected key filter query, got %s", request.Query)
+			}
+			response = `{"data":{"teams":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`
+		case 3:
+			if !strings.Contains(request.Query, "filter: $filter") {
+				t.Errorf("expected name filter query, got %s", request.Query)
+			}
+			response = `{"data":{"teams":{"nodes":[{"id":"team-uuid","key":"UUID-NAME","name":"` + selector + `","retiredAt":null}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`
+		}
+		if _, err := w.Write([]byte(response)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	team, err := newClient("test-token", server.URL).ResolveTeam(context.Background(), selector)
+	if err != nil {
+		t.Fatalf("resolve team: %v", err)
+	}
+	if team.ID != "team-uuid" || team.Name != selector {
+		t.Errorf("unexpected team: %+v", team)
+	}
+	if requests != 3 {
+		t.Errorf("expected UUID, key, and name queries, got %d", requests)
+	}
+}
+
+func TestClientResolveTeamReturnsTypedErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		wantType any
+	}{
+		{
+			name:     "not found",
+			response: `{"data":{"teams":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`,
+			wantType: &TeamNotFoundError{},
+		},
+		{
+			name:     "ambiguous exact name",
+			response: `{"data":{"teams":{"nodes":[{"id":"team-one","key":"ONE","name":"Platform","retiredAt":null},{"id":"team-two","key":"TWO","name":"Platform","retiredAt":null}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`,
+			wantType: &TeamAmbiguousError{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				response := tt.response
+				if calls == 1 {
+					response = `{"data":{"teams":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`
+				}
+				if _, err := w.Write([]byte(response)); err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			_, err := newClient("test-token", server.URL).ResolveTeam(context.Background(), "Platform")
+			if err == nil {
+				t.Fatal("expected resolution error")
+			}
+			switch tt.wantType.(type) {
+			case *TeamNotFoundError:
+				var target *TeamNotFoundError
+				if !errors.As(err, &target) {
+					t.Errorf("expected TeamNotFoundError, got %T", err)
+				}
+			case *TeamAmbiguousError:
+				var target *TeamAmbiguousError
+				if !errors.As(err, &target) {
+					t.Errorf("expected TeamAmbiguousError, got %T", err)
+				}
+				if len(target.Candidates) != 2 {
+					t.Errorf("expected useful candidates, got %+v", target.Candidates)
+				}
 			}
 		})
 	}

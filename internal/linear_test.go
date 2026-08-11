@@ -24,6 +24,13 @@ type fakeLinearClient struct {
 	err         error
 	createCalls int
 	updateCalls int
+	teams       []linear.Team
+	teamPage    linear.TeamPage
+	resolveTeam linear.Team
+	resolveErr  error
+	listErr     error
+	resolveTerm string
+	listRequest linear.TeamListRequest
 }
 
 func (f *fakeLinearClient) CreateIssue(_ context.Context, input linear.IssueCreateInput) (linear.Issue, error) {
@@ -48,6 +55,22 @@ func (f *fakeLinearClient) UpdateIssue(
 	return f.issue, f.err
 }
 
+func (f *fakeLinearClient) ListTeams(_ context.Context, request linear.TeamListRequest) (linear.TeamPage, error) {
+	f.listRequest = request
+	if f.listErr != nil {
+		return linear.TeamPage{}, f.listErr
+	}
+	return f.teamPage, nil
+}
+
+func (f *fakeLinearClient) ResolveTeam(_ context.Context, selector string) (linear.Team, error) {
+	f.resolveTerm = selector
+	if f.resolveErr != nil {
+		return linear.Team{}, f.resolveErr
+	}
+	return f.resolveTeam, nil
+}
+
 func newLinearIssue() linear.Issue {
 	return linear.Issue{
 		ID:          "issue-uuid",
@@ -55,6 +78,7 @@ func newLinearIssue() linear.Issue {
 		URL:         "https://linear.app/example/issue/DEV-123/example",
 		Title:       "Example issue",
 		Description: "Example description",
+		Team:        linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"},
 	}
 }
 
@@ -68,7 +92,8 @@ func withLinearClient(t *testing.T, client linear.Clienter) {
 func TestHandleLinearCreateSuccess(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team-uuid")
-	client := &fakeLinearClient{issue: newLinearIssue()}
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	client := &fakeLinearClient{issue: newLinearIssue(), resolveTeam: team}
 	withLinearClient(t, client)
 
 	var stdout bytes.Buffer
@@ -86,6 +111,9 @@ func TestHandleLinearCreateSuccess(t *testing.T) {
 		Title: "Example issue", Description: "Example description", TeamID: "team-uuid",
 	}) {
 		t.Errorf("unexpected create input: %+v", client.createInput)
+	}
+	if client.resolveTerm != "team-uuid" {
+		t.Errorf("expected LINEAR_TEAM_ID to be resolved, got %q", client.resolveTerm)
 	}
 
 	assertIssueOutput(t, stdout.Bytes())
@@ -158,7 +186,8 @@ func TestHandleLinearUpdateSupportsDescriptionFileAndClear(t *testing.T) {
 func TestHandleLinearCreateDryRunDoesNotCallClient(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "token")
 	t.Setenv("LINEAR_TEAM_ID", "team-uuid")
-	client := &fakeLinearClient{}
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	client := &fakeLinearClient{resolveTeam: team}
 	withLinearClient(t, client)
 
 	var stdout bytes.Buffer
@@ -180,6 +209,13 @@ func TestHandleLinearCreateDryRunDoesNotCallClient(t *testing.T) {
 		DryRun    bool                    `json:"dryRun"`
 		Operation string                  `json:"operation"`
 		Input     linear.IssueCreateInput `json:"input"`
+		Resolved  struct {
+			Team struct {
+				ID   string `json:"id"`
+				Key  string `json:"key"`
+				Name string `json:"name"`
+			} `json:"team"`
+		} `json:"resolved"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
 		t.Fatalf("decode dry-run output: %v", err)
@@ -191,6 +227,167 @@ func TestHandleLinearCreateDryRunDoesNotCallClient(t *testing.T) {
 		Title: "Example issue", Description: "body from stdin", TeamID: "team-uuid",
 	}) {
 		t.Errorf("unexpected dry-run input: %+v", output.Input)
+	}
+	if output.Resolved.Team.ID != "team-uuid" || output.Resolved.Team.Key != "DEV" ||
+		output.Resolved.Team.Name != "Development" {
+		t.Errorf("unexpected resolved team: %+v", output.Resolved.Team)
+	}
+}
+
+func TestHandleLinearCreateResolvesTeamFlagBeforeMutation(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	t.Setenv("LINEAR_TEAM_ID", "env-team")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	issue := newLinearIssue()
+	issue.Team = team
+	client := &fakeLinearClient{issue: issue, resolveTeam: team}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{"--title", "Example issue", "--team", "DEV"},
+	)
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	if client.resolveTerm != "DEV" {
+		t.Errorf("expected --team to take precedence, got %q", client.resolveTerm)
+	}
+	if client.createInput.TeamID != "team-uuid" {
+		t.Errorf("expected resolved team UUID, got %q", client.createInput.TeamID)
+	}
+
+	var output struct {
+		Team struct {
+			ID   string `json:"id"`
+			Key  string `json:"key"`
+			Name string `json:"name"`
+		} `json:"team"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode create output: %v", err)
+	}
+	if output.Team.ID != "team-uuid" || output.Team.Key != "DEV" || output.Team.Name != "Development" {
+		t.Errorf("unexpected output team: %+v", output.Team)
+	}
+}
+
+func TestHandleLinearTeamList(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	client := &fakeLinearClient{teamPage: linear.TeamPage{
+		Items:    []linear.Team{{ID: "team-uuid", Key: "DEV", Name: "Development"}},
+		PageInfo: linear.PageInfo{HasNextPage: true, NextCursor: "next-cursor"},
+	}}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearTeamList(&stdout, &stderr),
+		linearTeamListFlags(),
+		[]string{"--limit", "25", "--cursor", "previous-cursor"},
+	)
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+	if client.listRequest != (linear.TeamListRequest{Limit: 25, Cursor: "previous-cursor"}) {
+		t.Errorf("unexpected list request: %+v", client.listRequest)
+	}
+
+	var output struct {
+		Items []struct {
+			ID   string `json:"id"`
+			Key  string `json:"key"`
+			Name string `json:"name"`
+		} `json:"items"`
+		PageInfo struct {
+			HasNextPage bool   `json:"hasNextPage"`
+			NextCursor  string `json:"nextCursor"`
+		} `json:"pageInfo"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode list output: %v", err)
+	}
+	if len(output.Items) != 1 || output.Items[0].ID != "team-uuid" ||
+		output.Items[0].Key != "DEV" || output.Items[0].Name != "Development" {
+		t.Errorf("unexpected list items: %+v", output.Items)
+	}
+	if !output.PageInfo.HasNextPage || output.PageInfo.NextCursor != "next-cursor" {
+		t.Errorf("unexpected page info: %+v", output.PageInfo)
+	}
+}
+
+func TestHandleLinearCreateReportsTeamResolutionErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		resolveErr error
+		wantCode   string
+	}{
+		{
+			name:       "not found",
+			resolveErr: &linear.TeamNotFoundError{Selector: "missing"},
+			wantCode:   "team_not_found",
+		},
+		{
+			name: "ambiguous",
+			resolveErr: &linear.TeamAmbiguousError{Selector: "platform", Candidates: []linear.Team{
+				{ID: "team-one", Key: "PLAT", Name: "Platform"},
+				{ID: "team-two", Key: "PLATFORM", Name: "Platform"},
+			}},
+			wantCode: "ambiguous_team",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LINEAR_API_KEY", "token")
+			client := &fakeLinearClient{resolveErr: tt.resolveErr}
+			withLinearClient(t, client)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			err := runLinearCommand(
+				t,
+				handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+				linearCreateFlags(),
+				[]string{"--title", "Example issue", "--team", "missing"},
+			)
+			if err == nil {
+				t.Fatal("expected a non-zero exit error")
+			}
+			assertLinearErrorCode(t, stderr.Bytes(), tt.wantCode)
+			if client.createCalls != 0 {
+				t.Errorf("expected no mutation calls, got %d", client.createCalls)
+			}
+		})
+	}
+}
+
+func TestHandleLinearCreateRequiresTeamSelector(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	t.Setenv("LINEAR_TEAM_ID", "")
+	client := &fakeLinearClient{}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{"--title", "Example issue"},
+	)
+	if err == nil {
+		t.Fatal("expected a non-zero exit error")
+	}
+	assertLinearErrorCode(t, stderr.Bytes(), "missing_configuration")
+	if client.resolveTerm != "" || client.createCalls != 0 {
+		t.Errorf("expected no resolution or mutation, got selector=%q calls=%d", client.resolveTerm, client.createCalls)
 	}
 }
 
