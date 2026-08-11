@@ -2,23 +2,50 @@ package linear
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/shurcooL/graphql"
 )
 
+const apiURL = "https://api.linear.app/graphql"
+
+type Clienter interface {
+	CreateIssue(ctx context.Context, input IssueCreateInput) (Issue, error)
+	GetIssue(ctx context.Context, id string) (Issue, error)
+	UpdateIssue(ctx context.Context, id string, input UpdateIssueRequest) (Issue, error)
+}
+
+type APIError struct {
+	Operation string
+	Err       error
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("Linear %s: %v", e.Operation, e.Err)
+}
+
+func (e *APIError) Unwrap() error {
+	return e.Err
+}
+
 type Client struct {
 	client *graphql.Client
 }
 
-func NewClient(token string) Client {
+func NewClient(token string) *Client {
+	return newClient(token, apiURL)
+}
+
+func newClient(token, endpoint string) *Client {
 	httpClient := &http.Client{
 		Transport: &authTransport{token: token},
 	}
 
-	return Client{
-		client: graphql.NewClient("https://api.linear.app/graphql", httpClient),
+	return &Client{
+		client: graphql.NewClient(endpoint, httpClient),
 	}
 }
 
@@ -36,6 +63,7 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 type Issue struct {
 	ID          graphql.ID     `graphql:"id"`
 	Identifier  graphql.String `graphql:"identifier"`
+	URL         graphql.String `graphql:"url"`
 	Title       graphql.String `graphql:"title"`
 	Description graphql.String `graphql:"description"`
 	Assignee    User           `graphql:"assignee"`
@@ -73,7 +101,10 @@ func (c *Client) GetIssue(ctx context.Context, id string) (Issue, error) {
 	}
 	err := c.client.Query(ctx, &q, variables)
 	if err != nil {
-		return Issue{}, err
+		return Issue{}, &APIError{Operation: "get issue", Err: err}
+	}
+	if q.Issue.ID == nil {
+		return Issue{}, &APIError{Operation: "get issue", Err: errors.New("issue not found")}
 	}
 	return q.Issue, nil
 }
@@ -89,17 +120,48 @@ type IssuePayload struct {
 	Success graphql.Boolean `graphql:"success"`
 }
 
-type IssueUpdateInput struct {
-	Title       graphql.String `json:"title,omitempty"`
-	Description graphql.String `json:"description,omitempty"`
-	AssigneeID  graphql.ID     `json:"assigneeId,omitempty"`
-	StateID     graphql.ID     `json:"stateId,omitempty"`
+type IssueCreateInput struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	TeamID      string `json:"teamId"`
 }
 
-type IssueCreateInput struct {
-	Title       graphql.String `json:"title"`
-	Description graphql.String `json:"description"`
-	TeamID      graphql.ID     `json:"teamId"`
+type UpdateIssueRequest struct {
+	Title            *string
+	Description      *string
+	ClearDescription bool
+}
+
+func (i UpdateIssueRequest) MarshalJSON() ([]byte, error) {
+	input := map[string]any{}
+	if i.Title != nil {
+		input["title"] = *i.Title
+	}
+	if i.Description != nil {
+		input["description"] = *i.Description
+	}
+	if i.ClearDescription {
+		input["description"] = nil
+	}
+	return json.Marshal(input)
+}
+
+type nullableString struct {
+	Value *graphql.String
+}
+
+func (s nullableString) MarshalJSON() ([]byte, error) {
+	if s.Value == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(*s.Value)
+}
+
+type IssueUpdateInput struct {
+	Title       *graphql.String `json:"title,omitempty"`
+	Description *nullableString `json:"description,omitempty"`
+	AssigneeID  graphql.ID      `json:"assigneeId,omitempty"`
+	StateID     graphql.ID      `json:"stateId,omitempty"`
 }
 
 type IssueCreateMutation struct {
@@ -210,40 +272,51 @@ func (c *Client) GetWorkflowStates(ctx context.Context, teamID string) ([]Workfl
 	return q.WorkflowStates.Nodes, nil
 }
 
-func (c *Client) CreateIssue(ctx context.Context, title, description, teamID string) (Issue, error) {
+func (c *Client) CreateIssue(ctx context.Context, input IssueCreateInput) (Issue, error) {
 	var m struct {
 		IssueCreate IssueCreateMutation `graphql:"issueCreate(input: $input)"`
 	}
 	variables := map[string]any{
-		"input": IssueCreateInput{
-			Title:       graphql.String(title),
-			Description: graphql.String(description),
-			TeamID:      graphql.ID(teamID),
-		},
+		"input": input,
 	}
 	if err := c.client.Mutate(ctx, &m, variables); err != nil {
-		return Issue{}, err
+		return Issue{}, &APIError{Operation: "create issue", Err: err}
+	}
+	if !m.IssueCreate.Success {
+		return Issue{}, &APIError{Operation: "create issue", Err: errors.New("mutation was unsuccessful")}
 	}
 	return m.IssueCreate.Issue, nil
 }
 
-func (c *Client) UpdateIssue(ctx context.Context, id, title, description string) (Issue, error) {
+func (c *Client) UpdateIssue(ctx context.Context, id string, input UpdateIssueRequest) (Issue, error) {
 	var m struct {
 		IssueUpdate IssuePayload `graphql:"issueUpdate(id: $id, input: $input)"`
 	}
-	input := IssueUpdateInput{}
-	if title != "" {
-		input.Title = graphql.String(title)
-	}
-	if description != "" {
-		input.Description = graphql.String(description)
-	}
 	variables := map[string]any{
 		"id":    graphql.String(id),
-		"input": input,
+		"input": newIssueUpdateInput(input),
 	}
 	if err := c.client.Mutate(ctx, &m, variables); err != nil {
-		return Issue{}, err
+		return Issue{}, &APIError{Operation: "update issue", Err: err}
+	}
+	if !m.IssueUpdate.Success {
+		return Issue{}, &APIError{Operation: "update issue", Err: errors.New("mutation was unsuccessful")}
 	}
 	return m.IssueUpdate.Issue, nil
+}
+
+func newIssueUpdateInput(input UpdateIssueRequest) IssueUpdateInput {
+	output := IssueUpdateInput{}
+	if input.Title != nil {
+		title := graphql.String(*input.Title)
+		output.Title = &title
+	}
+	if input.Description != nil {
+		description := graphql.String(*input.Description)
+		output.Description = &nullableString{Value: &description}
+	}
+	if input.ClearDescription {
+		output.Description = &nullableString{}
+	}
+	return output
 }

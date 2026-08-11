@@ -246,42 +246,26 @@ func Run(
 				Description: "Create, view, and update Linear issues",
 				Subcommands: []*cli.Command{
 					{
-						Name:  "create",
-						Usage: "Create a new Linear issue",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:     "title",
-								Usage:    "title of the issue",
-								Required: true,
-							},
-							&cli.StringFlag{
-								Name:  "description",
-								Usage: "description of the issue",
-							},
-						},
-						Action: handleLinearCreate(stdout, stderr),
+						Name:         "create",
+						Usage:        "Create a new Linear issue",
+						Flags:        linearCreateFlags(),
+						OnUsageError: linearUsageError(stderr),
+						Action:       handleLinearCreate(stdout, stderr, os.Stdin),
 					},
 					{
-						Name:      "get",
-						Usage:     "Get an issue by ID",
-						ArgsUsage: "<issue-id>",
-						Action:    handleLinearGet(stdout, stderr),
+						Name:         "get",
+						Usage:        "Get an issue by ID",
+						ArgsUsage:    "<issue-id>",
+						OnUsageError: linearUsageError(stderr),
+						Action:       handleLinearGet(stdout, stderr),
 					},
 					{
-						Name:      "update",
-						Usage:     "Update an issue",
-						ArgsUsage: "<issue-id>",
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:  "title",
-								Usage: "title of the issue",
-							},
-							&cli.StringFlag{
-								Name:  "description",
-								Usage: "description of the issue",
-							},
-						},
-						Action: handleLinearUpdate(stdout, stderr),
+						Name:         "update",
+						Usage:        "Update an issue",
+						ArgsUsage:    "<issue-id>",
+						Flags:        linearUpdateFlags(),
+						OnUsageError: linearUsageError(stderr),
+						Action:       handleLinearUpdate(stdout, stderr, os.Stdin),
 					},
 				},
 			},
