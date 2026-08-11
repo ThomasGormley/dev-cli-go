@@ -34,6 +34,38 @@ const (
 	testPriorityNone        = 0
 )
 
+func TestClientGetIssueReturnsLabels(t *testing.T) {
+	requestReceived := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode GraphQL request: %v", err)
+			return
+		}
+		requestReceived <- request.Query
+		_, err := w.Write([]byte(`{"data":{"issue":{"id":"issue-uuid","labels":{"nodes":[{"id":"label-bug","name":"Bug","isGroup":false,"team":{"id":"team-uuid","key":"DEV","name":"Development"}}]}}}}`))
+		if err != nil {
+			t.Errorf("write GraphQL response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	issue, err := newClient("test-token", server.URL).GetIssue(context.Background(), "DEV-123")
+	if err != nil {
+		t.Fatalf("get issue: %v", err)
+	}
+	if len(issue.Labels.Nodes) != 1 || issue.Labels.Nodes[0].ID != "label-bug" ||
+		issue.Labels.Nodes[0].Name != "Bug" {
+		t.Errorf("unexpected issue labels: %+v", issue.Labels.Nodes)
+	}
+	if query := <-requestReceived; !strings.Contains(query, "labels(first:") {
+		t.Errorf("expected issue query to request labels, got %s", query)
+	}
+}
+
 func TestClientUpdateIssueClearsDescription(t *testing.T) {
 	requestReceived := make(chan struct {
 		Authorization string

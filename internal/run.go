@@ -243,7 +243,7 @@ func Run(
 			{
 				Name:        "linear",
 				Usage:       "Linear issue management",
-				Description: "Create, view, and update Linear issues",
+				Description: "JSON-first Linear issue management using exact selectors; discover values with list commands",
 				Subcommands: []*cli.Command{
 					{
 						Name:         "create",

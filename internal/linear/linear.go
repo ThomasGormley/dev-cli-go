@@ -88,6 +88,7 @@ type Issue struct {
 	Team             Team             `graphql:"team"`
 	Project          Project          `graphql:"project"`
 	ProjectMilestone ProjectMilestone `graphql:"projectMilestone"`
+	Labels           LabelConnection  `graphql:"labels(first: 50)"`
 }
 
 type User struct {
@@ -349,17 +350,17 @@ type filteredTeamsQuery struct {
 	Teams teamConnection `graphql:"teams(first: $first, after: $after, filter: $filter)"`
 }
 
-type labelConnection struct {
+type LabelConnection struct {
 	Nodes    []Label         `graphql:"nodes"`
 	PageInfo graphqlPageInfo `graphql:"pageInfo"`
 }
 
 type labelsQuery struct {
-	IssueLabels labelConnection `graphql:"issueLabels(first: $first, after: $after)"`
+	IssueLabels LabelConnection `graphql:"issueLabels(first: $first, after: $after)"`
 }
 
 type filteredLabelsQuery struct {
-	IssueLabels labelConnection `graphql:"issueLabels(first: $first, after: $after, filter: $filter)"`
+	IssueLabels LabelConnection `graphql:"issueLabels(first: $first, after: $after, filter: $filter)"`
 }
 
 type teamByIDQuery struct {
@@ -715,14 +716,14 @@ func (c *Client) queryTeamProjects(
 	return query.Team.Projects, nil
 }
 
-func (c *Client) queryLabels(ctx context.Context, limit int, cursor string) (labelConnection, error) {
+func (c *Client) queryLabels(ctx context.Context, limit int, cursor string) (LabelConnection, error) {
 	var query labelsQuery
 	variables := map[string]any{
 		"first": graphql.Int(limit),
 		"after": newCursor(cursor),
 	}
 	if err := c.client.Query(ctx, &query, variables); err != nil {
-		return labelConnection{}, err
+		return LabelConnection{}, err
 	}
 	return query.IssueLabels, nil
 }

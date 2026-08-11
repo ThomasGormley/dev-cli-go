@@ -1499,6 +1499,42 @@ func assertIssueOutput(t *testing.T, data []byte) {
 	}
 }
 
+func assertComposedLinearIssueOutput(t *testing.T, data []byte) {
+	t.Helper()
+	var output struct {
+		ID               string                        `json:"id"`
+		Identifier       string                        `json:"identifier"`
+		URL              string                        `json:"url"`
+		Title            string                        `json:"title"`
+		Description      string                        `json:"description"`
+		Team             linearTeamOutput              `json:"team"`
+		Assignee         *linearUserOutput             `json:"assignee"`
+		Priority         string                        `json:"priority"`
+		Project          *linearProjectOutput          `json:"project"`
+		ProjectMilestone *linearProjectMilestoneOutput `json:"projectMilestone"`
+		Labels           []linearLabelOutput           `json:"labels"`
+	}
+	if err := json.Unmarshal(data, &output); err != nil {
+		t.Fatalf("decode issue output: %v", err)
+	}
+	if output.ID != "issue-uuid" || output.Identifier != "DEV-123" ||
+		output.URL != "https://linear.app/example/issue/DEV-123/example" ||
+		output.Title != "Example issue" || output.Description != "Example description" {
+		t.Errorf("unexpected issue identity and content: %+v", output)
+	}
+	if output.Team.ID != "team-uuid" || output.Assignee == nil || output.Assignee.ID != "user-uuid" ||
+		output.Priority != "high" || output.Project == nil || output.Project.ID != "project-uuid" ||
+		output.ProjectMilestone == nil || output.ProjectMilestone.ID != "milestone-uuid" {
+		t.Errorf("unexpected composed issue properties: %+v", output)
+	}
+	if got, want := output.Labels, []linearLabelOutput{
+		{ID: "label-bug", Name: "Bug", Team: &linearTeamOutput{ID: "team-uuid", Key: "DEV", Name: "Development"}},
+		{ID: "label-platform", Name: "Platform", Team: nil},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("unexpected labels: got %+v, want %+v", got, want)
+	}
+}
+
 func assertLinearErrorCode(t *testing.T, data []byte, wantCode string) {
 	t.Helper()
 	var output struct {
@@ -1544,6 +1580,158 @@ func TestHandleLinearCreateResolvesMultipleLabelsBeforeMutation(t *testing.T) {
 	}
 	if got, want := client.labelTeams, []string{"team-uuid", "team-uuid"}; !slices.Equal(got, want) {
 		t.Errorf("expected labels resolved within team %v, got %v", want, got)
+	}
+}
+
+func TestLinearCommandsKeepComposedIssueShape(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	project := linear.Project{ID: "project-uuid", Name: "Agent work", SlugID: "agent-work"}
+	milestone := linear.ProjectMilestone{ID: "milestone-uuid", Name: "Launch", Project: project}
+	assignee := linear.User{ID: "user-uuid", Name: "Ada Lovelace", DisplayName: "Ada", Email: "ada@example.com", Active: true}
+	bug := linear.Label{ID: "label-bug", Name: "Bug", Team: team}
+	platform := linear.Label{ID: "label-platform", Name: "Platform"}
+	issue := newLinearIssue()
+	issue.Team = team
+	issue.Project = project
+	issue.ProjectMilestone = milestone
+	issue.Assignee = assignee
+	issue.Labels = linear.LabelConnection{Nodes: []linear.Label{bug, platform}}
+	client := &fakeLinearClient{
+		issue:            issue,
+		resolveTeam:      team,
+		resolveProject:   project,
+		resolveMilestone: milestone,
+		resolveUser:      assignee,
+		resolveLabels: map[string]linear.Label{
+			"Bug": bug, "Platform": platform,
+		},
+	}
+	withLinearClient(t, client)
+
+	tests := []struct {
+		name  string
+		flags []cli.Flag
+		args  []string
+	}{
+		{
+			name:  "create",
+			flags: linearCreateFlags(),
+			args: []string{
+				"--title", "Example issue", "--description", "Example description", "--team", "DEV",
+				"--assignee", "ada@example.com", "--priority", "high", "--project", "agent-work",
+				"--milestone", "Launch", "--label", "Bug", "--label", "Platform",
+			},
+		},
+		{
+			name: "get",
+			args: []string{"DEV-123"},
+		},
+		{
+			name:  "update",
+			flags: linearUpdateFlags(),
+			args: []string{
+				"--title", "Updated issue", "--assignee", "ada@example.com", "--priority", "high",
+				"--project", "agent-work", "--milestone", "Launch", "--add-label", "Bug", "DEV-123",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			var action cli.ActionFunc
+			switch tt.name {
+			case "create":
+				action = handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil))
+			case "update":
+				action = handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil))
+			default:
+				action = handleLinearGet(&stdout, &stderr)
+			}
+			err := runLinearCommand(t, action, tt.flags, tt.args)
+			if err != nil {
+				t.Fatalf("command returned error: %v; stderr=%s", err, stderr.String())
+			}
+			assertComposedLinearIssueOutput(t, stdout.Bytes())
+		})
+	}
+
+	if got, want := client.createInput.LabelIDs, []string{"label-bug", "label-platform"}; !slices.Equal(got, want) {
+		t.Errorf("expected resolved create labels %v, got %v", want, got)
+	}
+	if client.updateInput.AssigneeID == nil || *client.updateInput.AssigneeID != "user-uuid" ||
+		client.updateInput.ProjectID == nil || *client.updateInput.ProjectID != "project-uuid" ||
+		client.updateInput.ProjectMilestoneID == nil || *client.updateInput.ProjectMilestoneID != "milestone-uuid" {
+		t.Errorf("unexpected composed update input: %+v", client.updateInput)
+	}
+}
+
+func TestHandleLinearCreateDryRunComposesAllIssueProperties(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	project := linear.Project{ID: "project-uuid", Name: "Agent work", SlugID: "agent-work"}
+	milestone := linear.ProjectMilestone{ID: "milestone-uuid", Name: "Launch", Project: project}
+	assignee := linear.User{ID: "user-uuid", Name: "Ada Lovelace", DisplayName: "Ada", Email: "ada@example.com", Active: true}
+	bug := linear.Label{ID: "label-bug", Name: "Bug", Team: team}
+	platform := linear.Label{ID: "label-platform", Name: "Platform"}
+	client := &fakeLinearClient{
+		resolveTeam:      team,
+		resolveProject:   project,
+		resolveMilestone: milestone,
+		resolveUser:      assignee,
+		resolveLabels:    map[string]linear.Label{"Bug": bug, "Platform": platform},
+	}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{
+			"--title", "Example issue", "--description", "Example description", "--team", "DEV",
+			"--assignee", "ada@example.com", "--priority", "high", "--project", "agent-work",
+			"--milestone", "Launch", "--label", "Bug", "--label", "Platform", "--dry-run",
+		},
+	)
+	if err != nil {
+		t.Fatalf("dry run returned error: %v; stderr=%s", err, stderr.String())
+	}
+	if client.createCalls != 0 {
+		t.Errorf("dry run must not create an issue, got %d create calls", client.createCalls)
+	}
+
+	var output struct {
+		DryRun    bool   `json:"dryRun"`
+		Operation string `json:"operation"`
+		Input     struct {
+			TeamID             string   `json:"teamId"`
+			AssigneeID         string   `json:"assigneeId"`
+			Priority           int      `json:"priority"`
+			ProjectID          string   `json:"projectId"`
+			ProjectMilestoneID string   `json:"projectMilestoneId"`
+			LabelIDs           []string `json:"labelIds"`
+		} `json:"input"`
+		Resolved linearCreateResolvedOutput `json:"resolved"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode dry-run output: %v", err)
+	}
+	if !output.DryRun || output.Operation != "create" || output.Input.TeamID != "team-uuid" ||
+		output.Input.AssigneeID != "user-uuid" || output.Input.Priority != linearPriorityHigh ||
+		output.Input.ProjectID != "project-uuid" || output.Input.ProjectMilestoneID != "milestone-uuid" ||
+		!slices.Equal(output.Input.LabelIDs, []string{"label-bug", "label-platform"}) {
+		t.Errorf("unexpected dry-run input: %+v", output.Input)
+	}
+	if output.Resolved.Team.ID != "team-uuid" || output.Resolved.Assignee == nil ||
+		output.Resolved.Assignee.ID != "user-uuid" || output.Resolved.Project == nil ||
+		output.Resolved.Project.ID != "project-uuid" || output.Resolved.ProjectMilestone == nil ||
+		output.Resolved.ProjectMilestone.ID != "milestone-uuid" || output.Resolved.Priority == nil ||
+		*output.Resolved.Priority != "high" || len(output.Resolved.Labels) != 2 {
+		t.Errorf("unexpected dry-run resolutions: %+v", output.Resolved)
 	}
 }
 

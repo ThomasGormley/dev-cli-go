@@ -115,6 +115,7 @@ type linearIssueOutput struct {
 	ProjectMilestone *linearProjectMilestoneOutput `json:"projectMilestone"`
 	Assignee         *linearUserOutput             `json:"assignee"`
 	Priority         string                        `json:"priority"`
+	Labels           []linearLabelOutput           `json:"labels"`
 }
 
 type linearDryRunOutput struct {
@@ -1406,6 +1407,10 @@ func newLinearIssueOutput(
 	if err != nil {
 		return linearIssueOutput{}, err
 	}
+	labels, err := newLinearLabelOutputs(issue.Labels.Nodes)
+	if err != nil {
+		return linearIssueOutput{}, err
+	}
 	return linearIssueOutput{
 		ID:               id,
 		Identifier:       string(issue.Identifier),
@@ -1417,6 +1422,7 @@ func newLinearIssueOutput(
 		ProjectMilestone: projectMilestone,
 		Assignee:         assignee,
 		Priority:         linearPriorityName(int(issue.Priority)),
+		Labels:           labels,
 	}, nil
 }
 
