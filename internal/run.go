@@ -315,6 +315,19 @@ func Run(
 							Action:       handleLinearProjectMilestoneList(stdout, stderr),
 						}},
 					},
+					{
+						Name:  "user",
+						Usage: "Discover active Linear team members",
+						Subcommands: []*cli.Command{
+							{
+								Name:         "list",
+								Usage:        "List active members of a Linear team",
+								Flags:        linearUserListFlags(),
+								OnUsageError: linearUsageError(stderr),
+								Action:       handleLinearUserList(stdout, stderr),
+							},
+						},
+					},
 				},
 			},
 		},

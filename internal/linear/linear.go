@@ -24,7 +24,9 @@ type Clienter interface {
 		request ProjectMilestoneListRequest,
 	) (ProjectMilestonePage, error)
 	ListTeams(ctx context.Context, request TeamListRequest) (TeamPage, error)
+	ListUsers(ctx context.Context, teamID string, request UserListRequest) (UserPage, error)
 	ResolveLabel(ctx context.Context, teamID, selector string) (Label, error)
+	ResolveAssignee(ctx context.Context, teamID, selector string) (User, error)
 	ResolveProject(ctx context.Context, teamID string, selector string) (Project, error)
 	ResolveProjectMilestone(ctx context.Context, projectID string, selector string) (ProjectMilestone, error)
 	ResolveTeam(ctx context.Context, selector string) (Team, error)
@@ -80,6 +82,7 @@ type Issue struct {
 	Title            graphql.String   `graphql:"title"`
 	Description      graphql.String   `graphql:"description"`
 	Assignee         User             `graphql:"assignee"`
+	Priority         graphql.Int      `graphql:"priority"`
 	State            WorkflowState    `graphql:"state"`
 	BranchName       graphql.String   `graphql:"branchName"`
 	Team             Team             `graphql:"team"`
@@ -88,9 +91,11 @@ type Issue struct {
 }
 
 type User struct {
-	ID    graphql.ID     `graphql:"id"`
-	Name  graphql.String `graphql:"name"`
-	Email graphql.String `graphql:"email"`
+	ID          graphql.ID      `graphql:"id"`
+	Name        graphql.String  `graphql:"name"`
+	DisplayName graphql.String  `graphql:"displayName"`
+	Email       graphql.String  `graphql:"email"`
+	Active      graphql.Boolean `graphql:"active"`
 }
 
 type Team struct {
@@ -164,6 +169,16 @@ type LabelPage struct {
 
 type ProjectMilestonePage struct {
 	Items    []ProjectMilestone
+	PageInfo PageInfo
+}
+
+type UserListRequest struct {
+	Limit  int
+	Cursor string
+}
+
+type UserPage struct {
+	Items    []User
 	PageInfo PageInfo
 }
 
@@ -244,6 +259,23 @@ func (e *ProjectMilestoneAmbiguousError) Error() string {
 	return fmt.Sprintf("multiple project milestones in project %q match %q", e.ProjectID, e.Selector)
 }
 
+type UserNotFoundError struct {
+	Selector string
+}
+
+func (e *UserNotFoundError) Error() string {
+	return fmt.Sprintf("no active team member matches %q", e.Selector)
+}
+
+type UserAmbiguousError struct {
+	Selector   string
+	Candidates []User
+}
+
+func (e *UserAmbiguousError) Error() string {
+	return fmt.Sprintf("multiple active team members match %q", e.Selector)
+}
+
 func (e *ProjectAmbiguousError) Error() string {
 	return fmt.Sprintf("multiple active projects in team %q match %q", e.TeamID, e.Selector)
 }
@@ -252,9 +284,21 @@ type StringComparator struct {
 	EqIgnoreCase *graphql.String `json:"eqIgnoreCase,omitempty"`
 }
 
+type BooleanComparator struct {
+	Eq *graphql.Boolean `json:"eq,omitempty"`
+}
+
 type TeamFilter struct {
 	Key  *StringComparator `json:"key,omitempty"`
 	Name *StringComparator `json:"name,omitempty"`
+}
+
+type UserFilter struct {
+	Active      *BooleanComparator `json:"active,omitempty"`
+	ID          *IDComparator      `json:"id,omitempty"`
+	Email       *StringComparator  `json:"email,omitempty"`
+	Name        *StringComparator  `json:"name,omitempty"`
+	DisplayName *StringComparator  `json:"displayName,omitempty"`
 }
 
 type IDComparator struct {
@@ -332,6 +376,17 @@ type projectMilestonesQuery struct {
 	Project struct {
 		ProjectMilestones projectMilestoneConnection `graphql:"projectMilestones(first: $first, after: $after)"`
 	} `graphql:"project(id: $projectID)"`
+}
+
+type userConnection struct {
+	Nodes    []User          `graphql:"nodes"`
+	PageInfo graphqlPageInfo `graphql:"pageInfo"`
+}
+
+type teamMembersQuery struct {
+	Team struct {
+		Members userConnection `graphql:"members(first: $first, after: $after, filter: $filter)"`
+	} `graphql:"team(id: $teamID)"`
 }
 
 // RPC-style method to get issue information
@@ -465,6 +520,33 @@ func (c *Client) ListProjectMilestones(
 	return ProjectMilestonePage{Items: items, PageInfo: pageInfo}, nil
 }
 
+func (c *Client) ListUsers(ctx context.Context, teamID string, request UserListRequest) (UserPage, error) {
+	if request.Limit < 1 {
+		return UserPage{}, errors.New("user list limit must be greater than zero")
+	}
+
+	items := []User{}
+	cursor := request.Cursor
+	pageInfo := PageInfo{}
+	for len(items) < request.Limit {
+		connection, err := c.queryUsers(ctx, teamID, request.Limit-len(items), cursor, activeUserFilter())
+		if err != nil {
+			return UserPage{}, &APIError{Operation: "list users", Err: err}
+		}
+		for _, user := range connection.Nodes {
+			if len(items) < request.Limit && isActiveUser(user) {
+				items = append(items, user)
+			}
+		}
+		pageInfo = newPageInfo(connection.PageInfo)
+		if !pageInfo.HasNextPage {
+			break
+		}
+		cursor = pageInfo.NextCursor
+	}
+	return UserPage{Items: items, PageInfo: pageInfo}, nil
+}
+
 func (c *Client) ResolveTeam(ctx context.Context, selector string) (Team, error) {
 	if selector == "" {
 		return Team{}, &TeamNotFoundError{Selector: selector}
@@ -570,6 +652,39 @@ func (c *Client) ResolveProjectMilestone(
 	return exactlyOneProjectMilestone(projectID, selector, candidates)
 }
 
+func (c *Client) ResolveAssignee(ctx context.Context, teamID, selector string) (User, error) {
+	if selector == "" {
+		return User{}, &UserNotFoundError{Selector: selector}
+	}
+	if strings.EqualFold(selector, "me") {
+		viewer, err := c.GetViewer(ctx)
+		if err != nil {
+			return User{}, &APIError{Operation: "resolve assignee", Err: err}
+		}
+		viewerID, ok := viewer.ID.(string)
+		if !ok || viewerID == "" {
+			return User{}, &UserNotFoundError{Selector: selector}
+		}
+		return c.resolveUserByFilter(ctx, teamID, selector, UserFilter{ID: exactIDComparator(viewerID)})
+	}
+	if isUUID(selector) {
+		return c.resolveUserByFilter(ctx, teamID, selector, UserFilter{ID: exactIDComparator(selector)})
+	}
+	if strings.Contains(selector, "@") {
+		return c.resolveUserByFilter(ctx, teamID, selector, UserFilter{Email: exactComparator(selector)})
+	}
+
+	nameMatches, err := c.queryUsersByFilter(ctx, teamID, UserFilter{Name: exactComparator(selector)})
+	if err != nil {
+		return User{}, &APIError{Operation: "resolve assignee", Err: err}
+	}
+	displayNameMatches, err := c.queryUsersByFilter(ctx, teamID, UserFilter{DisplayName: exactComparator(selector)})
+	if err != nil {
+		return User{}, &APIError{Operation: "resolve assignee", Err: err}
+	}
+	return exactlyOneUser(selector, uniqueUsers(nameMatches, displayNameMatches))
+}
+
 func (c *Client) queryTeams(ctx context.Context, limit int, cursor string) (teamConnection, error) {
 	var query teamsQuery
 	variables := map[string]any{
@@ -628,6 +743,56 @@ func (c *Client) queryProjectMilestones(
 		return projectMilestoneConnection{}, err
 	}
 	return query.Project.ProjectMilestones, nil
+}
+
+func (c *Client) queryUsers(
+	ctx context.Context,
+	teamID string,
+	limit int,
+	cursor string,
+	filter UserFilter,
+) (userConnection, error) {
+	var query teamMembersQuery
+	variables := map[string]any{
+		"teamID": graphql.ID(teamID),
+		"first":  graphql.Int(limit),
+		"after":  newCursor(cursor),
+		"filter": filter,
+	}
+	if err := c.client.Query(ctx, &query, variables); err != nil {
+		return userConnection{}, err
+	}
+	return query.Team.Members, nil
+}
+
+func (c *Client) queryUsersByFilter(ctx context.Context, teamID string, filter UserFilter) ([]User, error) {
+	filter.Active = activeUserFilter().Active
+	items := []User{}
+	cursor := ""
+	for {
+		connection, err := c.queryUsers(ctx, teamID, 50, cursor, filter)
+		if err != nil {
+			return nil, err
+		}
+		for _, user := range connection.Nodes {
+			if isActiveUser(user) {
+				items = append(items, user)
+			}
+		}
+		pageInfo := newPageInfo(connection.PageInfo)
+		if !pageInfo.HasNextPage {
+			return items, nil
+		}
+		cursor = pageInfo.NextCursor
+	}
+}
+
+func (c *Client) resolveUserByFilter(ctx context.Context, teamID, selector string, filter UserFilter) (User, error) {
+	matches, err := c.queryUsersByFilter(ctx, teamID, filter)
+	if err != nil {
+		return User{}, &APIError{Operation: "resolve assignee", Err: err}
+	}
+	return exactlyOneUser(selector, matches)
 }
 
 func (c *Client) queryTeamsByFilter(ctx context.Context, filter TeamFilter) ([]Team, error) {
@@ -750,6 +915,33 @@ func exactlyOneProjectMilestone(
 	}
 }
 
+func exactlyOneUser(selector string, candidates []User) (User, error) {
+	switch len(candidates) {
+	case 0:
+		return User{}, &UserNotFoundError{Selector: selector}
+	case 1:
+		return candidates[0], nil
+	default:
+		return User{}, &UserAmbiguousError{Selector: selector, Candidates: candidates}
+	}
+}
+
+func uniqueUsers(groups ...[]User) []User {
+	users := []User{}
+	seen := map[string]bool{}
+	for _, group := range groups {
+		for _, user := range group {
+			id, ok := user.ID.(string)
+			if !ok || id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			users = append(users, user)
+		}
+	}
+	return users
+}
+
 func exactComparator(value string) *StringComparator {
 	selector := graphql.String(value)
 	return &StringComparator{EqIgnoreCase: &selector}
@@ -758,6 +950,11 @@ func exactComparator(value string) *StringComparator {
 func exactIDComparator(value string) *IDComparator {
 	selector := graphql.ID(value)
 	return &IDComparator{Eq: &selector}
+}
+
+func activeUserFilter() UserFilter {
+	active := graphql.Boolean(true)
+	return UserFilter{Active: &BooleanComparator{Eq: &active}}
 }
 
 func newCursor(cursor string) *graphql.String {
@@ -778,6 +975,10 @@ func isActiveTeam(team Team) bool {
 
 func isActiveProject(project Project) bool {
 	return project.ID != nil && project.ArchivedAt == ""
+}
+
+func isActiveUser(user User) bool {
+	return user.ID != nil && bool(user.Active)
 }
 
 func projectMatchesSelector(project Project, selector string) bool {
@@ -849,6 +1050,8 @@ type IssueCreateInput struct {
 	ProjectID          string   `json:"projectId,omitempty"`
 	ProjectMilestoneID string   `json:"projectMilestoneId,omitempty"`
 	LabelIDs           []string `json:"labelIds,omitempty"`
+	AssigneeID         string   `json:"assigneeId,omitempty"`
+	Priority           *int     `json:"priority,omitempty"`
 }
 
 type UpdateIssueRequest struct {
@@ -859,6 +1062,9 @@ type UpdateIssueRequest struct {
 	ClearProject          bool
 	ProjectMilestoneID    *string
 	ClearProjectMilestone bool
+	AssigneeID            *string
+	ClearAssignee         bool
+	Priority              *int
 	AddedLabelIDs         []string
 	RemovedLabelIDs       []string
 	ClearLabels           bool
@@ -880,6 +1086,15 @@ func (i UpdateIssueRequest) MarshalJSON() ([]byte, error) {
 	}
 	if i.ClearProject {
 		input["projectId"] = nil
+	}
+	if i.AssigneeID != nil {
+		input["assigneeId"] = *i.AssigneeID
+	}
+	if i.ClearAssignee {
+		input["assigneeId"] = nil
+	}
+	if i.Priority != nil {
+		input["priority"] = *i.Priority
 	}
 	if len(i.AddedLabelIDs) > 0 {
 		input["addedLabelIds"] = i.AddedLabelIDs
@@ -926,7 +1141,8 @@ type IssueUpdateInput struct {
 	Description        *nullableString `json:"description,omitempty"`
 	ProjectID          *nullableID     `json:"projectId,omitempty"`
 	ProjectMilestoneID *nullableID     `json:"projectMilestoneId,omitempty"`
-	AssigneeID         graphql.ID      `json:"assigneeId,omitempty"`
+	AssigneeID         *nullableID     `json:"assigneeId,omitempty"`
+	Priority           *graphql.Int    `json:"priority,omitempty"`
 	StateID            graphql.ID      `json:"stateId,omitempty"`
 	AddedLabelIDs      []graphql.ID    `json:"addedLabelIds,omitempty"`
 	RemovedLabelIDs    []graphql.ID    `json:"removedLabelIds,omitempty"`
@@ -981,7 +1197,7 @@ func (c *Client) AssignIssue(ctx context.Context, id string, assigneeID string) 
 	variables := map[string]any{
 		"id": graphql.String(id),
 		"input": IssueUpdateInput{
-			AssigneeID: graphql.ID(assigneeID),
+			AssigneeID: &nullableID{Value: pointerGraphQLID(graphql.ID(assigneeID))},
 			StateID:    inProgressID,
 		},
 	}
@@ -1094,6 +1310,17 @@ func newIssueUpdateInput(input UpdateIssueRequest) IssueUpdateInput {
 	if input.ClearProject {
 		output.ProjectID = &nullableID{}
 	}
+	if input.AssigneeID != nil {
+		assigneeID := graphql.ID(*input.AssigneeID)
+		output.AssigneeID = &nullableID{Value: &assigneeID}
+	}
+	if input.ClearAssignee {
+		output.AssigneeID = &nullableID{}
+	}
+	if input.Priority != nil {
+		priority := graphql.Int(*input.Priority)
+		output.Priority = &priority
+	}
 	output.AddedLabelIDs = newGraphQLIDs(input.AddedLabelIDs)
 	output.RemovedLabelIDs = newGraphQLIDs(input.RemovedLabelIDs)
 	if input.ClearLabels {
@@ -1108,6 +1335,10 @@ func newIssueUpdateInput(input UpdateIssueRequest) IssueUpdateInput {
 		output.ProjectMilestoneID = &nullableID{}
 	}
 	return output
+}
+
+func pointerGraphQLID(value graphql.ID) *graphql.ID {
+	return &value
 }
 
 func newGraphQLIDs(values []string) []graphql.ID {

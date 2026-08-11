@@ -52,6 +52,13 @@ type fakeLinearClient struct {
 	milestoneRequest    linear.ProjectMilestoneListRequest
 	resolveMilestone    linear.ProjectMilestone
 	resolveMilestoneErr error
+	userPage            linear.UserPage
+	userListErr         error
+	userRequest         linear.UserListRequest
+	resolveUser         linear.User
+	resolveUserErr      error
+	resolveUserTeamID   string
+	resolveUserTerm     string
 }
 
 func (f *fakeLinearClient) CreateIssue(_ context.Context, input linear.IssueCreateInput) (linear.Issue, error) {
@@ -127,6 +134,28 @@ func (f *fakeLinearClient) ResolveProject(_ context.Context, teamID string, sele
 	return f.resolveProject, nil
 }
 
+func (f *fakeLinearClient) ListUsers(
+	_ context.Context,
+	teamID string,
+	request linear.UserListRequest,
+) (linear.UserPage, error) {
+	f.resolveUserTeamID = teamID
+	f.userRequest = request
+	if f.userListErr != nil {
+		return linear.UserPage{}, f.userListErr
+	}
+	return f.userPage, nil
+}
+
+func (f *fakeLinearClient) ResolveAssignee(_ context.Context, teamID, selector string) (linear.User, error) {
+	f.resolveUserTeamID = teamID
+	f.resolveUserTerm = selector
+	if f.resolveUserErr != nil {
+		return linear.User{}, f.resolveUserErr
+	}
+	return f.resolveUser, nil
+}
+
 func (f *fakeLinearClient) ResolveLabel(_ context.Context, teamID, selector string) (linear.Label, error) {
 	f.labelTeams = append(f.labelTeams, teamID)
 	f.labelTerms = append(f.labelTerms, selector)
@@ -171,6 +200,10 @@ func newLinearIssue() linear.Issue {
 		Title:       "Example issue",
 		Description: "Example description",
 		Team:        linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"},
+		Assignee: linear.User{
+			ID: "user-uuid", Name: "Ada Lovelace", DisplayName: "Ada", Email: "ada@example.com", Active: true,
+		},
+		Priority: linearPriorityHigh,
 	}
 }
 
@@ -508,6 +541,61 @@ func TestHandleLinearTeamList(t *testing.T) {
 	if len(output.Items) != 1 || output.Items[0].ID != "team-uuid" ||
 		output.Items[0].Key != "DEV" || output.Items[0].Name != "Development" {
 		t.Errorf("unexpected list items: %+v", output.Items)
+	}
+	if !output.PageInfo.HasNextPage || output.PageInfo.NextCursor != "next-cursor" {
+		t.Errorf("unexpected page info: %+v", output.PageInfo)
+	}
+}
+
+func TestHandleLinearUserList(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	client := &fakeLinearClient{
+		resolveTeam: team,
+		userPage: linear.UserPage{
+			Items: []linear.User{{
+				ID: "user-uuid", Name: "Ada Lovelace", DisplayName: "Ada", Email: "ada@example.com", Active: true,
+			}},
+			PageInfo: linear.PageInfo{HasNextPage: true, NextCursor: "next-cursor"},
+		},
+	}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearUserList(&stdout, &stderr),
+		linearUserListFlags(),
+		[]string{"--team", "DEV", "--limit", "25", "--cursor", "previous-cursor"},
+	)
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+	if client.resolveTerm != "DEV" || client.resolveUserTeamID != "team-uuid" ||
+		client.userRequest != (linear.UserListRequest{Limit: 25, Cursor: "previous-cursor"}) {
+		t.Errorf("unexpected user listing calls: team=%q teamID=%q request=%+v", client.resolveTerm,
+			client.resolveUserTeamID, client.userRequest)
+	}
+
+	var output struct {
+		Items []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			DisplayName string `json:"displayName"`
+			Email       string `json:"email"`
+		} `json:"items"`
+		PageInfo struct {
+			HasNextPage bool   `json:"hasNextPage"`
+			NextCursor  string `json:"nextCursor"`
+		} `json:"pageInfo"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode user list output: %v", err)
+	}
+	if len(output.Items) != 1 || output.Items[0].ID != "user-uuid" ||
+		output.Items[0].DisplayName != "Ada" || output.Items[0].Email != "ada@example.com" {
+		t.Errorf("unexpected user list output: %+v", output.Items)
 	}
 	if !output.PageInfo.HasNextPage || output.PageInfo.NextCursor != "next-cursor" {
 		t.Errorf("unexpected page info: %+v", output.PageInfo)
@@ -933,6 +1021,246 @@ func TestHandleLinearCreateReportsProjectResolutionErrors(t *testing.T) {
 	assertLinearErrorCode(t, stderr.Bytes(), "ambiguous_project")
 	if client.createCalls != 0 {
 		t.Errorf("expected no mutation calls, got %d", client.createCalls)
+	}
+}
+
+func TestHandleLinearCreateResolvesAssigneeAndPriority(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	user := linear.User{ID: "user-uuid", Name: "Ada Lovelace", DisplayName: "Ada", Email: "ada@example.com", Active: true}
+	client := &fakeLinearClient{issue: newLinearIssue(), resolveTeam: team, resolveUser: user}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{"--title", "Example issue", "--team", "DEV", "--assignee", "me", "--priority", "HIGH"},
+	)
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	if client.resolveUserTeamID != "team-uuid" || client.resolveUserTerm != "me" ||
+		client.createInput.AssigneeID != "user-uuid" || client.createInput.Priority == nil ||
+		*client.createInput.Priority != linearPriorityHigh {
+		t.Errorf("unexpected create input: %+v, user selector=%q team=%q", client.createInput,
+			client.resolveUserTerm, client.resolveUserTeamID)
+	}
+
+	var output struct {
+		Assignee *struct {
+			ID string `json:"id"`
+		} `json:"assignee"`
+		Priority string `json:"priority"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode create output: %v", err)
+	}
+	if output.Assignee == nil || output.Assignee.ID != "user-uuid" || output.Priority != "high" {
+		t.Errorf("unexpected created issue output: %+v", output)
+	}
+}
+
+func TestHandleLinearCreateDryRunReportsResolvedAssigneeAndPriority(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	user := linear.User{
+		ID: "user-uuid", Name: "Ada Lovelace", DisplayName: "Ada", Email: "ada@example.com", Active: true,
+	}
+	client := &fakeLinearClient{resolveTeam: team, resolveUser: user}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{
+			"--title", "Example issue", "--team", "DEV", "--assignee", "ada@example.com",
+			"--priority", "urgent", "--dry-run",
+		},
+	)
+	if err != nil {
+		t.Fatalf("dry run returned error: %v", err)
+	}
+	if client.createCalls != 0 {
+		t.Errorf("expected no create calls, got %d", client.createCalls)
+	}
+
+	var output struct {
+		Input struct {
+			AssigneeID string `json:"assigneeId"`
+			Priority   int    `json:"priority"`
+		} `json:"input"`
+		Resolved struct {
+			Assignee struct {
+				ID          string `json:"id"`
+				DisplayName string `json:"displayName"`
+			} `json:"assignee"`
+			Priority string `json:"priority"`
+		} `json:"resolved"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode dry-run output: %v", err)
+	}
+	if output.Input.AssigneeID != "user-uuid" || output.Input.Priority != linearPriorityUrgent ||
+		output.Resolved.Assignee.ID != "user-uuid" || output.Resolved.Assignee.DisplayName != "Ada" ||
+		output.Resolved.Priority != "urgent" {
+		t.Errorf("unexpected dry-run resolution: %+v", output)
+	}
+}
+
+func TestHandleLinearUpdateSupportsCombinedAssigneeAndPriorityMutations(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	user := linear.User{ID: "user-uuid", Name: "Ada Lovelace", DisplayName: "Ada", Email: "ada@example.com", Active: true}
+	client := &fakeLinearClient{issue: newLinearIssue(), resolveUser: user}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearUpdateFlags(),
+		[]string{"--assignee", "ada@example.com", "--priority", "low", "DEV-123"},
+	)
+	if err != nil {
+		t.Fatalf("update returned error: %v", err)
+	}
+	if client.getID != "DEV-123" || client.resolveUserTeamID != "team-uuid" ||
+		client.updateInput.AssigneeID == nil || *client.updateInput.AssigneeID != "user-uuid" ||
+		client.updateInput.Priority == nil || *client.updateInput.Priority != linearPriorityLow {
+		t.Errorf("unexpected combined update: get=%q input=%+v", client.getID, client.updateInput)
+	}
+}
+
+func TestHandleLinearUpdateClearsAssigneeAndSetsNoPriority(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	client := &fakeLinearClient{issue: newLinearIssue()}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearUpdateFlags(),
+		[]string{"--clear-assignee", "--priority", "none", "DEV-123"},
+	)
+	if err != nil {
+		t.Fatalf("update returned error: %v", err)
+	}
+	if !client.updateInput.ClearAssignee || client.updateInput.AssigneeID != nil ||
+		client.updateInput.Priority == nil || *client.updateInput.Priority != linearPriorityNone {
+		t.Errorf("unexpected clear update input: %+v", client.updateInput)
+	}
+	if client.getID != "" || client.resolveUserTerm != "" {
+		t.Errorf("clear-assignee should not need a user lookup: get=%q selector=%q", client.getID, client.resolveUserTerm)
+	}
+}
+
+func TestHandleLinearUpdateRejectsInvalidPriorityAndConflictingAssigneeFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "invalid priority", args: []string{"--priority", "critical", "DEV-123"}},
+		{name: "empty priority", args: []string{"--priority", "", "DEV-123"}},
+		{name: "clear and set assignee", args: []string{"--assignee", "me", "--clear-assignee", "DEV-123"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LINEAR_API_KEY", "token")
+			client := &fakeLinearClient{}
+			withLinearClient(t, client)
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			err := runLinearCommand(t, handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)), linearUpdateFlags(), tt.args)
+			if err == nil {
+				t.Fatal("expected an invalid arguments error")
+			}
+			assertLinearErrorCode(t, stderr.Bytes(), "invalid_arguments")
+			if client.updateCalls != 0 || client.getID != "" {
+				t.Errorf("expected no client calls, got update=%d get=%q", client.updateCalls, client.getID)
+			}
+		})
+	}
+}
+
+func TestHandleLinearCreateReportsAssigneeResolutionErrors(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	client := &fakeLinearClient{
+		resolveTeam: team,
+		resolveUserErr: &linear.UserAmbiguousError{
+			Selector: "Alex",
+			Candidates: []linear.User{
+				{ID: "user-one", Name: "Alex", DisplayName: "Alex One", Email: "one@example.com", Active: true},
+				{ID: "user-two", Name: "Alex", DisplayName: "Alex Two", Email: "two@example.com", Active: true},
+			},
+		},
+	}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{"--title", "Example issue", "--team", "DEV", "--assignee", "Alex"},
+	)
+	if err == nil {
+		t.Fatal("expected an assignee resolution error")
+	}
+	assertLinearErrorCode(t, stderr.Bytes(), "ambiguous_assignee")
+	if client.createCalls != 0 {
+		t.Errorf("expected no mutation calls, got %d", client.createCalls)
+	}
+
+	var output struct {
+		Error struct {
+			Candidates []struct {
+				ID    string `json:"id"`
+				Email string `json:"email"`
+			} `json:"candidates"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &output); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if len(output.Error.Candidates) != 2 || output.Error.Candidates[0].ID != "user-one" ||
+		output.Error.Candidates[1].Email != "two@example.com" {
+		t.Errorf("unexpected candidates: %+v", output.Error.Candidates)
+	}
+}
+
+func TestLinearPriorityNames(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  int
+	}{
+		{name: "none", value: "none", want: linearPriorityNone},
+		{name: "urgent", value: "urgent", want: linearPriorityUrgent},
+		{name: "high", value: "high", want: linearPriorityHigh},
+		{name: "medium", value: "medium", want: linearPriorityMedium},
+		{name: "low", value: "low", want: linearPriorityLow},
+		{name: "case insensitive", value: "HIGH", want: linearPriorityHigh},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := linearPriority(tt.value)
+			if err != nil {
+				t.Fatalf("parse priority: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("expected priority %d, got %d", tt.want, got)
+			}
+		})
 	}
 }
 

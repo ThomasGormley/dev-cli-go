@@ -31,6 +31,7 @@ const issueUpdateResponse = `{
 const (
 	labelPageLimit          = 2
 	remainingLabelPageLimit = 1
+	testPriorityNone        = 0
 )
 
 func TestClientUpdateIssueClearsDescription(t *testing.T) {
@@ -877,6 +878,177 @@ func TestClientResolveLabelRejectsAmbiguityAndGroups(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestClientListUsersPaginatesAndExcludesInactiveUsers(t *testing.T) {
+	requests := make([]struct {
+		First  int    `json:"first"`
+		After  string `json:"after"`
+		TeamID string `json:"teamID"`
+	}, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				First  int    `json:"first"`
+				After  string `json:"after"`
+				TeamID string `json:"teamID"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests = append(requests, request.Variables)
+		response := `{"data":{"team":{"members":{"nodes":[{"id":"user-one","name":"One","displayName":"One","email":"one@example.com","active":true},{"id":"user-inactive","name":"Inactive","displayName":"Inactive","email":"inactive@example.com","active":false}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-one"}}}}}`
+		if len(requests) == 2 {
+			response = `{"data":{"team":{"members":{"nodes":[{"id":"user-two","name":"Two","displayName":"Two","email":"two@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`
+		}
+		if _, err := w.Write([]byte(response)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	page, err := newClient("test-token", server.URL).ListUsers(context.Background(), "team-uuid", UserListRequest{Limit: 2})
+	if err != nil {
+		t.Fatalf("list users: %v", err)
+	}
+	if len(page.Items) != 2 || page.Items[0].ID != "user-one" || page.Items[1].ID != "user-two" {
+		t.Errorf("unexpected users: %+v", page.Items)
+	}
+	if page.PageInfo.HasNextPage || page.PageInfo.NextCursor != "" {
+		t.Errorf("unexpected page info: %+v", page.PageInfo)
+	}
+	if len(requests) != 2 || requests[0].First != 2 || requests[0].After != "" ||
+		requests[1].First != 1 || requests[1].After != "cursor-one" {
+		t.Errorf("unexpected pagination requests: %+v", requests)
+	}
+}
+
+func TestClientResolveAssignee(t *testing.T) {
+	tests := []struct {
+		name     string
+		selector string
+		response string
+		wantType any
+	}{
+		{
+			name:     "exact email",
+			selector: "ada@example.com",
+			response: `{"data":{"team":{"members":{"nodes":[{"id":"user-ada","name":"Ada Lovelace","displayName":"Ada","email":"ada@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		},
+		{
+			name:     "ambiguous exact name",
+			selector: "Alex",
+			response: `{"data":{"team":{"members":{"nodes":[{"id":"user-one","name":"Alex","displayName":"Alex","email":"one@example.com","active":true},{"id":"user-two","name":"Alex","displayName":"Alex","email":"two@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+			wantType: &UserAmbiguousError{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if _, err := w.Write([]byte(tt.response)); err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			user, err := newClient("test-token", server.URL).ResolveAssignee(context.Background(), "team-uuid", tt.selector)
+			if tt.wantType == nil {
+				if err != nil {
+					t.Fatalf("resolve assignee: %v", err)
+				}
+				if user.ID != "user-ada" || user.Email != "ada@example.com" {
+					t.Errorf("unexpected resolved user: %+v", user)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected resolution error")
+			}
+			var target *UserAmbiguousError
+			if !errors.As(err, &target) {
+				t.Fatalf("expected UserAmbiguousError, got %T", err)
+			}
+			if len(target.Candidates) != 2 {
+				t.Errorf("expected useful candidates, got %+v", target.Candidates)
+			}
+		})
+	}
+}
+
+func TestClientResolveAssigneeMeRequiresAnActiveTeamMember(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		response := `{"data":{"viewer":{"id":"viewer-uuid","name":"Viewer","displayName":"Viewer","email":"viewer@example.com","active":true}}}`
+		if requests == 2 {
+			response = `{"data":{"team":{"members":{"nodes":[{"id":"viewer-uuid","name":"Viewer","displayName":"Viewer","email":"viewer@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`
+		}
+		if _, err := w.Write([]byte(response)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	user, err := newClient("test-token", server.URL).ResolveAssignee(context.Background(), "team-uuid", "me")
+	if err != nil {
+		t.Fatalf("resolve me: %v", err)
+	}
+	if user.ID != "viewer-uuid" || requests != 2 {
+		t.Errorf("unexpected resolved viewer: %+v, calls=%d", user, requests)
+	}
+}
+
+func TestIssueMutationInputsIncludeAssigneeAndPriority(t *testing.T) {
+	requestReceived := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				Input map[string]any `json:"input"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requestReceived <- request.Variables.Input
+		if _, err := w.Write([]byte(issueUpdateResponse)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	priority := testPriorityNone
+	assigneeID := "user-uuid"
+	_, err := newClient("test-token", server.URL).UpdateIssue(context.Background(), "DEV-123", UpdateIssueRequest{
+		AssigneeID: &assigneeID,
+		Priority:   &priority,
+	})
+	if err != nil {
+		t.Fatalf("update issue: %v", err)
+	}
+	request := <-requestReceived
+	if request["assigneeId"] != "user-uuid" || request["priority"] != float64(testPriorityNone) {
+		t.Errorf("expected assignee and priority mutation input, got %#v", request)
+	}
+}
+
+func TestIssueUpdateInputClearsAssignee(t *testing.T) {
+	data, err := json.Marshal(UpdateIssueRequest{ClearAssignee: true})
+	if err != nil {
+		t.Fatalf("marshal update request: %v", err)
+	}
+	var output map[string]any
+	if err := json.Unmarshal(data, &output); err != nil {
+		t.Fatalf("decode update request: %v", err)
+	}
+	if value, ok := output["assigneeId"]; !ok || value != nil {
+		t.Errorf("expected explicit null assignee, got %#v", output)
 	}
 }
 
