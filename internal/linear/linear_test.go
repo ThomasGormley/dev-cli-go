@@ -162,6 +162,145 @@ func TestClientCreateIssueIncludesProject(t *testing.T) {
 	}
 }
 
+func TestClientCreateIssueIncludesProjectMilestone(t *testing.T) {
+	requestReceived := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				Input map[string]any `json:"input"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode GraphQL request: %v", err)
+			return
+		}
+		requestReceived <- request.Variables.Input
+		_, err := w.Write([]byte(`{"data":{"issueCreate":{"success":true,"issue":{"id":"issue-uuid"}}}}`))
+		if err != nil {
+			t.Errorf("write GraphQL response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	_, err := newClient("test-token", server.URL).CreateIssue(context.Background(), IssueCreateInput{
+		Title: "Example", TeamID: "team-uuid", ProjectID: "project-uuid", ProjectMilestoneID: "milestone-uuid",
+	})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	input := <-requestReceived
+	if input["projectMilestoneId"] != "milestone-uuid" {
+		t.Errorf("expected project milestone ID in mutation input, got %#v", input)
+	}
+}
+
+func TestClientUpdateIssueClearsProjectMilestone(t *testing.T) {
+	requestReceived := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				Input map[string]any `json:"input"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode GraphQL request: %v", err)
+			return
+		}
+		requestReceived <- request.Variables.Input
+		_, err := w.Write([]byte(issueUpdateResponse))
+		if err != nil {
+			t.Errorf("write GraphQL response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	_, err := newClient("test-token", server.URL).UpdateIssue(
+		context.Background(),
+		"DEV-123",
+		UpdateIssueRequest{ClearProjectMilestone: true},
+	)
+	if err != nil {
+		t.Fatalf("update issue: %v", err)
+	}
+
+	input := <-requestReceived
+	value, ok := input["projectMilestoneId"]
+	if !ok || value != nil {
+		t.Errorf("expected an explicit null projectMilestoneId, got %#v", input)
+	}
+}
+
+func TestClientListAndResolveProjectMilestones(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		requests++
+		response := `{
+  "data": {
+    "project": {
+      "projectMilestones": {
+        "nodes": [
+          {"id":"milestone-one","name":"Launch","targetDate":"2026-08-20","status":"planned","project":{"id":"project-uuid"}}
+        ],
+        "pageInfo": {"hasNextPage": false, "endCursor": ""}
+      }
+    }
+  }
+}`
+		if requests == 1 {
+			response = `{
+  "data": {
+    "project": {
+      "projectMilestones": {
+        "nodes": [
+          {"id":"milestone-one","name":"Launch","targetDate":"2026-08-20","status":"planned","project":{"id":"project-uuid"}}
+        ],
+        "pageInfo": {"hasNextPage": true, "endCursor": "next-cursor"}
+      }
+    }
+  }
+}`
+		}
+		if requests == 2 {
+			response = `{
+  "data": {
+    "project": {
+      "projectMilestones": {
+        "nodes": [
+          {"id":"milestone-two","name":"Ship","targetDate":"2026-08-21","status":"planned","project":{"id":"project-uuid"}}
+        ],
+        "pageInfo": {"hasNextPage": false, "endCursor": ""}
+      }
+    }
+  }
+}`
+		}
+		if _, err := w.Write([]byte(response)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client := newClient("test-token", server.URL)
+	page, err := client.ListProjectMilestones(context.Background(), "project-uuid", ProjectMilestoneListRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("list milestones: %v", err)
+	}
+	if len(page.Items) != 2 || page.Items[0].ID != "milestone-one" || page.Items[1].ID != "milestone-two" ||
+		page.Items[0].Project.ID != "project-uuid" {
+		t.Errorf("unexpected milestone page: %+v", page)
+	}
+	milestone, err := client.ResolveProjectMilestone(context.Background(), "project-uuid", "launch")
+	if err != nil {
+		t.Fatalf("resolve milestone: %v", err)
+	}
+	if milestone.ID != "milestone-one" || milestone.Name != "Launch" || requests != 3 {
+		t.Errorf("unexpected resolved milestone: %+v, requests=%d", milestone, requests)
+	}
+}
+
 func TestClientListProjectsPaginatesAndExcludesArchivedProjects(t *testing.T) {
 	requests := make([]struct {
 		First  int    `json:"first"`

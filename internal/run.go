@@ -296,15 +296,24 @@ func Run(
 					{
 						Name:  "label",
 						Usage: "Discover applicable Linear issue labels",
-						Subcommands: []*cli.Command{
-							{
-								Name:         "list",
-								Usage:        "List workspace and team labels",
-								Flags:        linearLabelListFlags(),
-								OnUsageError: linearUsageError(stderr),
-								Action:       handleLinearLabelList(stdout, stderr),
-							},
-						},
+						Subcommands: []*cli.Command{{
+							Name:         "list",
+							Usage:        "List workspace and team labels",
+							Flags:        linearLabelListFlags(),
+							OnUsageError: linearUsageError(stderr),
+							Action:       handleLinearLabelList(stdout, stderr),
+						}},
+					},
+					{
+						Name:  "milestone",
+						Usage: "Discover Linear project milestones",
+						Subcommands: []*cli.Command{{
+							Name:         "list",
+							Usage:        "List project milestones",
+							Flags:        linearProjectMilestoneListFlags(),
+							OnUsageError: linearUsageError(stderr),
+							Action:       handleLinearProjectMilestoneList(stdout, stderr),
+						}},
 					},
 				},
 			},

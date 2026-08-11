@@ -18,9 +18,15 @@ type Clienter interface {
 	GetIssue(ctx context.Context, id string) (Issue, error)
 	ListLabels(ctx context.Context, teamID string, request LabelListRequest) (LabelPage, error)
 	ListProjects(ctx context.Context, teamID string, request ProjectListRequest) (ProjectPage, error)
+	ListProjectMilestones(
+		ctx context.Context,
+		projectID string,
+		request ProjectMilestoneListRequest,
+	) (ProjectMilestonePage, error)
 	ListTeams(ctx context.Context, request TeamListRequest) (TeamPage, error)
 	ResolveLabel(ctx context.Context, teamID, selector string) (Label, error)
 	ResolveProject(ctx context.Context, teamID string, selector string) (Project, error)
+	ResolveProjectMilestone(ctx context.Context, projectID string, selector string) (ProjectMilestone, error)
 	ResolveTeam(ctx context.Context, selector string) (Team, error)
 	UpdateIssue(ctx context.Context, id string, input UpdateIssueRequest) (Issue, error)
 }
@@ -68,16 +74,17 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // GraphQL types for Linear API
 type Issue struct {
-	ID          graphql.ID     `graphql:"id"`
-	Identifier  graphql.String `graphql:"identifier"`
-	URL         graphql.String `graphql:"url"`
-	Title       graphql.String `graphql:"title"`
-	Description graphql.String `graphql:"description"`
-	Assignee    User           `graphql:"assignee"`
-	State       WorkflowState  `graphql:"state"`
-	BranchName  graphql.String `graphql:"branchName"`
-	Team        Team           `graphql:"team"`
-	Project     Project        `graphql:"project"`
+	ID               graphql.ID       `graphql:"id"`
+	Identifier       graphql.String   `graphql:"identifier"`
+	URL              graphql.String   `graphql:"url"`
+	Title            graphql.String   `graphql:"title"`
+	Description      graphql.String   `graphql:"description"`
+	Assignee         User             `graphql:"assignee"`
+	State            WorkflowState    `graphql:"state"`
+	BranchName       graphql.String   `graphql:"branchName"`
+	Team             Team             `graphql:"team"`
+	Project          Project          `graphql:"project"`
+	ProjectMilestone ProjectMilestone `graphql:"projectMilestone"`
 }
 
 type User struct {
@@ -98,6 +105,14 @@ type Project struct {
 	Name       graphql.String `graphql:"name"`
 	SlugID     graphql.String `graphql:"slugId"`
 	ArchivedAt graphql.String `graphql:"archivedAt"`
+}
+
+type ProjectMilestone struct {
+	ID         graphql.ID     `graphql:"id"`
+	Name       graphql.String `graphql:"name"`
+	TargetDate graphql.String `graphql:"targetDate"`
+	Status     graphql.String `graphql:"status"`
+	Project    Project        `graphql:"project"`
 }
 
 type PageInfo struct {
@@ -137,8 +152,18 @@ type LabelListRequest struct {
 	Cursor string
 }
 
+type ProjectMilestoneListRequest struct {
+	Limit  int
+	Cursor string
+}
+
 type LabelPage struct {
 	Items    []Label
+	PageInfo PageInfo
+}
+
+type ProjectMilestonePage struct {
+	Items    []ProjectMilestone
 	PageInfo PageInfo
 }
 
@@ -200,6 +225,25 @@ type ProjectAmbiguousError struct {
 	Candidates []Project
 }
 
+type ProjectMilestoneNotFoundError struct {
+	ProjectID string
+	Selector  string
+}
+
+func (e *ProjectMilestoneNotFoundError) Error() string {
+	return fmt.Sprintf("no project milestone in project %q matches %q", e.ProjectID, e.Selector)
+}
+
+type ProjectMilestoneAmbiguousError struct {
+	ProjectID  string
+	Selector   string
+	Candidates []ProjectMilestone
+}
+
+func (e *ProjectMilestoneAmbiguousError) Error() string {
+	return fmt.Sprintf("multiple project milestones in project %q match %q", e.ProjectID, e.Selector)
+}
+
 func (e *ProjectAmbiguousError) Error() string {
 	return fmt.Sprintf("multiple active projects in team %q match %q", e.TeamID, e.Selector)
 }
@@ -243,6 +287,11 @@ type projectConnection struct {
 	PageInfo graphqlPageInfo `graphql:"pageInfo"`
 }
 
+type projectMilestoneConnection struct {
+	Nodes    []ProjectMilestone `graphql:"nodes"`
+	PageInfo graphqlPageInfo    `graphql:"pageInfo"`
+}
+
 type graphqlPageInfo struct {
 	HasNextPage graphql.Boolean `graphql:"hasNextPage"`
 	EndCursor   graphql.String  `graphql:"endCursor"`
@@ -277,6 +326,12 @@ type teamProjectsQuery struct {
 	Team struct {
 		Projects projectConnection `graphql:"projects(first: $first, after: $after)"`
 	} `graphql:"team(id: $teamID)"`
+}
+
+type projectMilestonesQuery struct {
+	Project struct {
+		ProjectMilestones projectMilestoneConnection `graphql:"projectMilestones(first: $first, after: $after)"`
+	} `graphql:"project(id: $projectID)"`
 }
 
 // RPC-style method to get issue information
@@ -379,6 +434,37 @@ func (c *Client) ListLabels(ctx context.Context, teamID string, request LabelLis
 	return LabelPage{Items: items, PageInfo: pageInfo}, nil
 }
 
+func (c *Client) ListProjectMilestones(
+	ctx context.Context,
+	projectID string,
+	request ProjectMilestoneListRequest,
+) (ProjectMilestonePage, error) {
+	if request.Limit < 1 {
+		return ProjectMilestonePage{}, errors.New("project milestone list limit must be greater than zero")
+	}
+
+	items := []ProjectMilestone{}
+	cursor := request.Cursor
+	pageInfo := PageInfo{}
+	for len(items) < request.Limit {
+		connection, err := c.queryProjectMilestones(ctx, projectID, request.Limit-len(items), cursor)
+		if err != nil {
+			return ProjectMilestonePage{}, &APIError{Operation: "list project milestones", Err: err}
+		}
+		for _, milestone := range connection.Nodes {
+			if len(items) < request.Limit {
+				items = append(items, milestone)
+			}
+		}
+		pageInfo = newPageInfo(connection.PageInfo)
+		if !pageInfo.HasNextPage {
+			break
+		}
+		cursor = pageInfo.NextCursor
+	}
+	return ProjectMilestonePage{Items: items, PageInfo: pageInfo}, nil
+}
+
 func (c *Client) ResolveTeam(ctx context.Context, selector string) (Team, error) {
 	if selector == "" {
 		return Team{}, &TeamNotFoundError{Selector: selector}
@@ -454,6 +540,36 @@ func (c *Client) ResolveLabel(ctx context.Context, teamID, selector string) (Lab
 	return exactlyOneLabel(selector, nameMatches)
 }
 
+func (c *Client) ResolveProjectMilestone(
+	ctx context.Context,
+	projectID string,
+	selector string,
+) (ProjectMilestone, error) {
+	if selector == "" {
+		return ProjectMilestone{}, &ProjectMilestoneNotFoundError{ProjectID: projectID, Selector: selector}
+	}
+
+	candidates := []ProjectMilestone{}
+	cursor := ""
+	for {
+		connection, err := c.queryProjectMilestones(ctx, projectID, 50, cursor)
+		if err != nil {
+			return ProjectMilestone{}, &APIError{Operation: "resolve project milestone", Err: err}
+		}
+		for _, milestone := range connection.Nodes {
+			if milestoneMatchesSelector(milestone, selector) && projectMatchesID(milestone.Project, projectID) {
+				candidates = append(candidates, milestone)
+			}
+		}
+		pageInfo := newPageInfo(connection.PageInfo)
+		if !pageInfo.HasNextPage {
+			break
+		}
+		cursor = pageInfo.NextCursor
+	}
+	return exactlyOneProjectMilestone(projectID, selector, candidates)
+}
+
 func (c *Client) queryTeams(ctx context.Context, limit int, cursor string) (teamConnection, error) {
 	var query teamsQuery
 	variables := map[string]any{
@@ -494,6 +610,24 @@ func (c *Client) queryLabels(ctx context.Context, limit int, cursor string) (lab
 		return labelConnection{}, err
 	}
 	return query.IssueLabels, nil
+}
+
+func (c *Client) queryProjectMilestones(
+	ctx context.Context,
+	projectID string,
+	limit int,
+	cursor string,
+) (projectMilestoneConnection, error) {
+	var query projectMilestonesQuery
+	variables := map[string]any{
+		"projectID": graphql.ID(projectID),
+		"first":     graphql.Int(limit),
+		"after":     newCursor(cursor),
+	}
+	if err := c.client.Query(ctx, &query, variables); err != nil {
+		return projectMilestoneConnection{}, err
+	}
+	return query.Project.ProjectMilestones, nil
 }
 
 func (c *Client) queryTeamsByFilter(ctx context.Context, filter TeamFilter) ([]Team, error) {
@@ -597,6 +731,25 @@ func exactlyOneLabel(selector string, candidates []Label) (Label, error) {
 	}
 }
 
+func exactlyOneProjectMilestone(
+	projectID string,
+	selector string,
+	candidates []ProjectMilestone,
+) (ProjectMilestone, error) {
+	switch len(candidates) {
+	case 0:
+		return ProjectMilestone{}, &ProjectMilestoneNotFoundError{ProjectID: projectID, Selector: selector}
+	case 1:
+		return candidates[0], nil
+	default:
+		return ProjectMilestone{}, &ProjectMilestoneAmbiguousError{
+			ProjectID:  projectID,
+			Selector:   selector,
+			Candidates: candidates,
+		}
+	}
+}
+
 func exactComparator(value string) *StringComparator {
 	selector := graphql.String(value)
 	return &StringComparator{EqIgnoreCase: &selector}
@@ -646,6 +799,19 @@ func isApplicableLabel(label Label, teamID string) bool {
 	return ok && labelTeamID == teamID
 }
 
+func milestoneMatchesSelector(milestone ProjectMilestone, selector string) bool {
+	if isUUID(selector) {
+		id, ok := milestone.ID.(string)
+		return ok && id == selector
+	}
+	return strings.EqualFold(string(milestone.Name), selector)
+}
+
+func projectMatchesID(project Project, id string) bool {
+	projectID, ok := project.ID.(string)
+	return ok && projectID == id
+}
+
 func isUUID(value string) bool {
 	if len(value) != 36 {
 		return false
@@ -677,22 +843,25 @@ type IssuePayload struct {
 }
 
 type IssueCreateInput struct {
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	TeamID      string   `json:"teamId"`
-	ProjectID   string   `json:"projectId,omitempty"`
-	LabelIDs    []string `json:"labelIds,omitempty"`
+	Title              string   `json:"title"`
+	Description        string   `json:"description"`
+	TeamID             string   `json:"teamId"`
+	ProjectID          string   `json:"projectId,omitempty"`
+	ProjectMilestoneID string   `json:"projectMilestoneId,omitempty"`
+	LabelIDs           []string `json:"labelIds,omitempty"`
 }
 
 type UpdateIssueRequest struct {
-	Title            *string
-	Description      *string
-	ClearDescription bool
-	ProjectID        *string
-	ClearProject     bool
-	AddedLabelIDs    []string
-	RemovedLabelIDs  []string
-	ClearLabels      bool
+	Title                 *string
+	Description           *string
+	ClearDescription      bool
+	ProjectID             *string
+	ClearProject          bool
+	ProjectMilestoneID    *string
+	ClearProjectMilestone bool
+	AddedLabelIDs         []string
+	RemovedLabelIDs       []string
+	ClearLabels           bool
 }
 
 func (i UpdateIssueRequest) MarshalJSON() ([]byte, error) {
@@ -721,6 +890,12 @@ func (i UpdateIssueRequest) MarshalJSON() ([]byte, error) {
 	if i.ClearLabels {
 		input["labelIds"] = []string{}
 	}
+	if i.ProjectMilestoneID != nil {
+		input["projectMilestoneId"] = *i.ProjectMilestoneID
+	}
+	if i.ClearProjectMilestone {
+		input["projectMilestoneId"] = nil
+	}
 	return json.Marshal(input)
 }
 
@@ -747,14 +922,15 @@ func (s nullableString) MarshalJSON() ([]byte, error) {
 }
 
 type IssueUpdateInput struct {
-	Title           *graphql.String `json:"title,omitempty"`
-	Description     *nullableString `json:"description,omitempty"`
-	ProjectID       *nullableID     `json:"projectId,omitempty"`
-	AssigneeID      graphql.ID      `json:"assigneeId,omitempty"`
-	StateID         graphql.ID      `json:"stateId,omitempty"`
-	AddedLabelIDs   []graphql.ID    `json:"addedLabelIds,omitempty"`
-	RemovedLabelIDs []graphql.ID    `json:"removedLabelIds,omitempty"`
-	LabelIDs        *[]graphql.ID   `json:"labelIds,omitempty"`
+	Title              *graphql.String `json:"title,omitempty"`
+	Description        *nullableString `json:"description,omitempty"`
+	ProjectID          *nullableID     `json:"projectId,omitempty"`
+	ProjectMilestoneID *nullableID     `json:"projectMilestoneId,omitempty"`
+	AssigneeID         graphql.ID      `json:"assigneeId,omitempty"`
+	StateID            graphql.ID      `json:"stateId,omitempty"`
+	AddedLabelIDs      []graphql.ID    `json:"addedLabelIds,omitempty"`
+	RemovedLabelIDs    []graphql.ID    `json:"removedLabelIds,omitempty"`
+	LabelIDs           *[]graphql.ID   `json:"labelIds,omitempty"`
 }
 
 type IssueCreateMutation struct {
@@ -923,6 +1099,13 @@ func newIssueUpdateInput(input UpdateIssueRequest) IssueUpdateInput {
 	if input.ClearLabels {
 		labelIDs := []graphql.ID{}
 		output.LabelIDs = &labelIDs
+	}
+	if input.ProjectMilestoneID != nil {
+		milestoneID := graphql.ID(*input.ProjectMilestoneID)
+		output.ProjectMilestoneID = &nullableID{Value: &milestoneID}
+	}
+	if input.ClearProjectMilestone {
+		output.ProjectMilestoneID = &nullableID{}
 	}
 	return output
 }

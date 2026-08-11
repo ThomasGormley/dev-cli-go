@@ -18,34 +18,40 @@ import (
 )
 
 type fakeLinearClient struct {
-	createInput        linear.IssueCreateInput
-	getID              string
-	updateID           string
-	updateInput        linear.UpdateIssueRequest
-	issue              linear.Issue
-	err                error
-	createCalls        int
-	updateCalls        int
-	teams              []linear.Team
-	teamPage           linear.TeamPage
-	resolveTeam        linear.Team
-	resolveErr         error
-	listErr            error
-	resolveTerm        string
-	listRequest        linear.TeamListRequest
-	projects           linear.ProjectPage
-	projectErr         error
-	projectTerm        string
-	projectTeam        string
-	projectPageRequest linear.ProjectListRequest
-	resolveProject     linear.Project
-	resolveProjectErr  error
-	labelPage          linear.LabelPage
-	labelRequest       linear.LabelListRequest
-	labelListTeam      string
-	resolveLabels      map[string]linear.Label
-	labelTeams         []string
-	labelTerms         []string
+	createInput         linear.IssueCreateInput
+	getID               string
+	updateID            string
+	updateInput         linear.UpdateIssueRequest
+	issue               linear.Issue
+	err                 error
+	createCalls         int
+	updateCalls         int
+	teamPage            linear.TeamPage
+	resolveTeam         linear.Team
+	resolveErr          error
+	listErr             error
+	resolveTerm         string
+	listRequest         linear.TeamListRequest
+	projects            linear.ProjectPage
+	projectErr          error
+	projectTerm         string
+	projectTeam         string
+	projectPageRequest  linear.ProjectListRequest
+	resolveProject      linear.Project
+	resolveProjectErr   error
+	labelPage           linear.LabelPage
+	labelRequest        linear.LabelListRequest
+	labelListTeam       string
+	resolveLabels       map[string]linear.Label
+	labelTeams          []string
+	labelTerms          []string
+	milestones          linear.ProjectMilestonePage
+	milestoneErr        error
+	milestoneProject    string
+	milestoneTerm       string
+	milestoneRequest    linear.ProjectMilestoneListRequest
+	resolveMilestone    linear.ProjectMilestone
+	resolveMilestoneErr error
 }
 
 func (f *fakeLinearClient) CreateIssue(_ context.Context, input linear.IssueCreateInput) (linear.Issue, error) {
@@ -129,6 +135,32 @@ func (f *fakeLinearClient) ResolveLabel(_ context.Context, teamID, selector stri
 		return linear.Label{}, &linear.LabelNotFoundError{Selector: selector}
 	}
 	return label, nil
+}
+
+func (f *fakeLinearClient) ListProjectMilestones(
+	_ context.Context,
+	projectID string,
+	request linear.ProjectMilestoneListRequest,
+) (linear.ProjectMilestonePage, error) {
+	f.milestoneProject = projectID
+	f.milestoneRequest = request
+	if f.milestoneErr != nil {
+		return linear.ProjectMilestonePage{}, f.milestoneErr
+	}
+	return f.milestones, nil
+}
+
+func (f *fakeLinearClient) ResolveProjectMilestone(
+	_ context.Context,
+	projectID string,
+	selector string,
+) (linear.ProjectMilestone, error) {
+	f.milestoneProject = projectID
+	f.milestoneTerm = selector
+	if f.resolveMilestoneErr != nil {
+		return linear.ProjectMilestone{}, f.resolveMilestoneErr
+	}
+	return f.resolveMilestone, nil
 }
 
 func newLinearIssue() linear.Issue {
@@ -378,6 +410,64 @@ func TestHandleLinearCreateResolvesProjectBeforeMutation(t *testing.T) {
 	}
 }
 
+func TestHandleLinearCreateRequiresProjectForMilestone(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	client := &fakeLinearClient{}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{"--title", "Example issue", "--milestone", "Launch"},
+	)
+	if err == nil {
+		t.Fatal("expected a non-zero exit error")
+	}
+	assertLinearErrorCode(t, stderr.Bytes(), "invalid_arguments")
+	if client.createCalls != 0 || client.milestoneTerm != "" {
+		t.Errorf("expected no resolution or mutation, got milestones=%q creates=%d", client.milestoneTerm, client.createCalls)
+	}
+}
+
+func TestHandleLinearCreateResolvesProjectMilestoneBeforeMutation(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	project := linear.Project{ID: "project-uuid", Name: "Agent work", SlugID: "agent-work"}
+	milestone := linear.ProjectMilestone{ID: "milestone-uuid", Name: "Launch", Project: project}
+	issue := newLinearIssue()
+	issue.Team = team
+	issue.Project = project
+	issue.ProjectMilestone = milestone
+	client := &fakeLinearClient{
+		issue: issue, resolveTeam: team, resolveProject: project, resolveMilestone: milestone,
+	}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearCreate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearCreateFlags(),
+		[]string{"--title", "Example issue", "--team", "DEV", "--project", "agent-work", "--milestone", "Launch"},
+	)
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	if client.createInput.ProjectID != "project-uuid" || client.createInput.ProjectMilestoneID != "milestone-uuid" ||
+		client.milestoneProject != "project-uuid" || client.milestoneTerm != "Launch" {
+		t.Errorf(
+			"unexpected milestone resolution: input=%+v project=%q selector=%q",
+			client.createInput,
+			client.milestoneProject,
+			client.milestoneTerm,
+		)
+	}
+}
+
 func TestHandleLinearTeamList(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "token")
 	client := &fakeLinearClient{teamPage: linear.TeamPage{
@@ -474,26 +564,19 @@ func TestHandleLinearProjectList(t *testing.T) {
 func TestHandleLinearLabelListIncludesTeamWorkspaceAndGroups(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "token")
 	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
-	client := &fakeLinearClient{
-		resolveTeam: team,
-		labelPage: linear.LabelPage{
-			Items: []linear.Label{
-				{ID: "team-label", Name: "Bug", Team: team},
-				{ID: "workspace-group", Name: "Type", IsGroup: true},
-			},
-			PageInfo: linear.PageInfo{HasNextPage: true, NextCursor: "next-cursor"},
+	client := &fakeLinearClient{resolveTeam: team, labelPage: linear.LabelPage{
+		Items: []linear.Label{
+			{ID: "team-label", Name: "Bug", Team: team},
+			{ID: "workspace-group", Name: "Type", IsGroup: true},
 		},
-	}
+		PageInfo: linear.PageInfo{HasNextPage: true, NextCursor: "next-cursor"},
+	}}
 	withLinearClient(t, client)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	err := runLinearCommand(
-		t,
-		handleLinearLabelList(&stdout, &stderr),
-		linearLabelListFlags(),
-		[]string{"--team", "DEV", "--limit", "25", "--cursor", "previous-cursor"},
-	)
+	err := runLinearCommand(t, handleLinearLabelList(&stdout, &stderr), linearLabelListFlags(),
+		[]string{"--team", "DEV", "--limit", "25", "--cursor", "previous-cursor"})
 	if err != nil {
 		t.Fatalf("list returned error: %v", err)
 	}
@@ -506,29 +589,43 @@ func TestHandleLinearLabelListIncludesTeamWorkspaceAndGroups(t *testing.T) {
 			client.labelRequest,
 		)
 	}
+}
+
+func TestHandleLinearProjectMilestoneList(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	project := linear.Project{ID: "project-uuid", Name: "Agent work", SlugID: "agent-work"}
+	client := &fakeLinearClient{resolveTeam: team, resolveProject: project, milestones: linear.ProjectMilestonePage{
+		Items:    []linear.ProjectMilestone{{ID: "milestone-uuid", Name: "Launch", Project: project}},
+		PageInfo: linear.PageInfo{HasNextPage: true, NextCursor: "next-cursor"},
+	}}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(t, handleLinearProjectMilestoneList(&stdout, &stderr), linearProjectMilestoneListFlags(),
+		[]string{"--team", "DEV", "--project", "agent-work", "--limit", "25", "--cursor", "previous-cursor"})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+	if client.milestoneProject != "project-uuid" ||
+		client.milestoneRequest != (linear.ProjectMilestoneListRequest{Limit: 25, Cursor: "previous-cursor"}) {
+		t.Errorf(
+			"unexpected milestone list request: project=%q request=%+v",
+			client.milestoneProject,
+			client.milestoneRequest,
+		)
+	}
 	var output struct {
-		Items []struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			IsGroup bool   `json:"isGroup"`
-			Team    *struct {
-				ID string `json:"id"`
-			} `json:"team"`
-		} `json:"items"`
-		PageInfo struct {
-			HasNextPage bool   `json:"hasNextPage"`
-			NextCursor  string `json:"nextCursor"`
-		} `json:"pageInfo"`
+		Items    []linearProjectMilestoneOutput `json:"items"`
+		PageInfo linearPageInfoOutput           `json:"pageInfo"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
-		t.Fatalf("decode label list output: %v", err)
+		t.Fatalf("decode list output: %v", err)
 	}
-	if len(output.Items) != 2 || output.Items[0].Team == nil || output.Items[0].Team.ID != "team-uuid" ||
-		!output.Items[1].IsGroup || output.Items[1].Team != nil {
-		t.Errorf("unexpected label list output: %+v", output)
-	}
-	if !output.PageInfo.HasNextPage || output.PageInfo.NextCursor != "next-cursor" {
-		t.Errorf("unexpected page info: %+v", output.PageInfo)
+	if len(output.Items) != 1 || output.Items[0].ID != "milestone-uuid" || output.Items[0].Name != "Launch" ||
+		!output.PageInfo.HasNextPage || output.PageInfo.NextCursor != "next-cursor" {
+		t.Errorf("unexpected milestone list output: %+v", output)
 	}
 }
 
@@ -595,6 +692,150 @@ func TestHandleLinearUpdateResolvesAndClearsProject(t *testing.T) {
 	}
 	if clearedOutput.Project != nil {
 		t.Errorf("expected cleared issue output to report no project, got %+v", clearedOutput)
+	}
+}
+
+func TestHandleLinearUpdateProjectMilestones(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
+	oldProject := linear.Project{ID: "project-old", Name: "Old", SlugID: "old"}
+	newProject := linear.Project{ID: "project-new", Name: "New", SlugID: "new"}
+	oldMilestone := linear.ProjectMilestone{ID: "milestone-old", Name: "Old launch", Project: oldProject}
+	newMilestone := linear.ProjectMilestone{ID: "milestone-new", Name: "New launch", Project: newProject}
+
+	tests := []struct {
+		name                 string
+		args                 []string
+		project              linear.Project
+		milestone            linear.ProjectMilestone
+		resolveProject       linear.Project
+		resolveMilestone     linear.ProjectMilestone
+		wantError            bool
+		wantProjectID        string
+		wantMilestoneID      string
+		wantClearProject     bool
+		wantClearMilestone   bool
+		wantMilestoneProject string
+	}{
+		{
+			name:    "infers current project for milestone",
+			args:    []string{"--milestone", "Old launch", "DEV-123"},
+			project: oldProject, milestone: oldMilestone, resolveMilestone: oldMilestone,
+			wantMilestoneID: "milestone-old", wantMilestoneProject: "project-old",
+		},
+		{
+			name:    "rejects project move with existing milestone",
+			args:    []string{"--project", "new", "DEV-123"},
+			project: oldProject, milestone: oldMilestone, resolveProject: newProject, wantError: true,
+		},
+		{
+			name:    "allows project move when clearing milestone",
+			args:    []string{"--project", "new", "--clear-milestone", "DEV-123"},
+			project: oldProject, milestone: oldMilestone, resolveProject: newProject,
+			wantProjectID: "project-new", wantClearMilestone: true,
+		},
+		{
+			name:    "allows combined project and milestone move",
+			args:    []string{"--project", "new", "--milestone", "New launch", "DEV-123"},
+			project: oldProject, milestone: oldMilestone, resolveProject: newProject, resolveMilestone: newMilestone,
+			wantProjectID: "project-new", wantMilestoneID: "milestone-new", wantMilestoneProject: "project-new",
+		},
+		{
+			name:    "clearing project clears milestone relationship",
+			args:    []string{"--clear-project", "DEV-123"},
+			project: oldProject, milestone: oldMilestone, wantClearProject: true, wantClearMilestone: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issue := newLinearIssue()
+			issue.Team = team
+			issue.Project = tt.project
+			issue.ProjectMilestone = tt.milestone
+			client := &fakeLinearClient{
+				issue: issue, resolveProject: tt.resolveProject, resolveMilestone: tt.resolveMilestone,
+			}
+			withLinearClient(t, client)
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			err := runLinearCommand(
+				t,
+				handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+				linearUpdateFlags(),
+				tt.args,
+			)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected a non-zero exit error")
+				}
+				assertLinearErrorCode(t, stderr.Bytes(), "invalid_arguments")
+				if client.updateCalls != 0 {
+					t.Errorf("expected no mutation, got %d update calls", client.updateCalls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("update returned error: %v", err)
+			}
+			if tt.wantProjectID != "" &&
+				(client.updateInput.ProjectID == nil || *client.updateInput.ProjectID != tt.wantProjectID) {
+				t.Errorf("unexpected project input: %+v", client.updateInput)
+			}
+			if tt.wantMilestoneID != "" &&
+				(client.updateInput.ProjectMilestoneID == nil || *client.updateInput.ProjectMilestoneID != tt.wantMilestoneID) {
+				t.Errorf("unexpected milestone input: %+v", client.updateInput)
+			}
+			if client.updateInput.ClearProject != tt.wantClearProject ||
+				client.updateInput.ClearProjectMilestone != tt.wantClearMilestone ||
+				client.milestoneProject != tt.wantMilestoneProject {
+				t.Errorf(
+					"unexpected relationship update: input=%+v milestoneProject=%q",
+					client.updateInput,
+					client.milestoneProject,
+				)
+			}
+		})
+	}
+}
+
+func TestHandleLinearUpdateClearProjectDryRunReportsMilestoneClear(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "token")
+	client := &fakeLinearClient{}
+	withLinearClient(t, client)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runLinearCommand(
+		t,
+		handleLinearUpdate(&stdout, &stderr, bytes.NewReader(nil)),
+		linearUpdateFlags(),
+		[]string{"--clear-project", "--dry-run", "DEV-123"},
+	)
+	if err != nil {
+		t.Fatalf("dry-run returned error: %v", err)
+	}
+	if client.getID != "" || client.updateCalls != 0 {
+		t.Errorf("expected no issue read or mutation, got get=%q updates=%d", client.getID, client.updateCalls)
+	}
+	var output struct {
+		DryRun bool `json:"dryRun"`
+		Input  struct {
+			ProjectID          any `json:"projectId"`
+			ProjectMilestoneID any `json:"projectMilestoneId"`
+		} `json:"input"`
+		Resolved struct {
+			Project          *linearProjectOutput          `json:"project"`
+			ProjectMilestone *linearProjectMilestoneOutput `json:"projectMilestone"`
+		} `json:"resolved"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("decode dry-run output: %v", err)
+	}
+	if !output.DryRun || output.Input.ProjectID != nil || output.Input.ProjectMilestoneID != nil ||
+		output.Resolved.Project != nil || output.Resolved.ProjectMilestone != nil {
+		t.Errorf("unexpected clear-project dry-run output: %+v", output)
 	}
 }
 
