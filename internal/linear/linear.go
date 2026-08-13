@@ -2,23 +2,62 @@ package linear
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/shurcooL/graphql"
 )
+
+const apiURL = "https://api.linear.app/graphql"
+
+type Clienter interface {
+	CreateIssue(ctx context.Context, input IssueCreateInput) (Issue, error)
+	FindIssue(ctx context.Context, id string) (Issue, bool, error)
+	ListLabels(ctx context.Context, teamID string, request LabelListRequest) (LabelPage, error)
+	ListProjects(ctx context.Context, teamID string, request ProjectListRequest) (ProjectPage, error)
+	ListProjectMilestones(
+		ctx context.Context,
+		projectID string,
+		request ProjectMilestoneListRequest,
+	) (ProjectMilestonePage, error)
+	ListTeams(ctx context.Context, request TeamListRequest) (TeamPage, error)
+	ListUsers(ctx context.Context, teamID string, request UserListRequest) (UserPage, error)
+	FindLabel(ctx context.Context, teamID, selector string) (Label, bool, error)
+	FindAssignee(ctx context.Context, teamID, selector string) (User, bool, error)
+	FindProject(ctx context.Context, teamID string, selector string) (Project, bool, error)
+	FindProjectMilestone(ctx context.Context, projectID string, selector string) (ProjectMilestone, bool, error)
+	FindTeam(ctx context.Context, selector string) (Team, bool, error)
+	UpdateIssue(ctx context.Context, id string, input UpdateIssueRequest) (Issue, error)
+}
+
+type APIError struct {
+	Operation string
+	Err       error
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("Linear %s: %v", e.Operation, e.Err)
+}
+
+func (e *APIError) Unwrap() error {
+	return e.Err
+}
 
 type Client struct {
 	client *graphql.Client
 }
 
 func NewClient(token string) Client {
+	return newClient(token, apiURL)
+}
+
+func newClient(token, endpoint string) Client {
 	httpClient := &http.Client{
-		Transport: &authTransport{token: token},
+		Transport: authTransport{token: token},
 	}
 
 	return Client{
-		client: graphql.NewClient("https://api.linear.app/graphql", httpClient),
+		client: graphql.NewClient(endpoint, httpClient),
 	}
 }
 
@@ -26,224 +65,25 @@ type authTransport struct {
 	token string
 }
 
-func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req.Header.Set("Authorization", t.token)
 	req.Header.Set("Content-Type", "application/json")
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// GraphQL types for Linear API
-type Issue struct {
-	ID          graphql.ID     `graphql:"id"`
-	Identifier  graphql.String `graphql:"identifier"`
-	Title       graphql.String `graphql:"title"`
-	Description graphql.String `graphql:"description"`
-	Assignee    User           `graphql:"assignee"`
-	State       WorkflowState  `graphql:"state"`
-	BranchName  graphql.String `graphql:"branchName"`
-	Team        Team           `graphql:"team"`
+func graphQLString(value string) graphql.String {
+	return graphql.String(value)
 }
 
-type User struct {
-	ID    graphql.ID     `graphql:"id"`
-	Name  graphql.String `graphql:"name"`
-	Email graphql.String `graphql:"email"`
+func graphQLID(value string) graphql.ID {
+	return graphql.ID(value)
 }
 
-type Team struct {
-	ID graphql.ID `graphql:"id"`
+func graphQLInt(value int) graphql.Int {
+	return graphql.Int(value)
 }
 
-type WorkflowState struct {
-	ID   graphql.ID     `graphql:"id"`
-	Name graphql.String `graphql:"name"`
-	Type graphql.String `graphql:"type"`
-}
-
-// Query struct for getting an issue
-type GetIssueQuery struct {
-	Issue Issue `graphql:"issue(id: $id)"`
-}
-
-// RPC-style method to get issue information
-func (c *Client) GetIssue(ctx context.Context, id string) (Issue, error) {
-	var q GetIssueQuery
-	variables := map[string]any{
-		"id": graphql.String(id),
-	}
-	err := c.client.Query(ctx, &q, variables)
-	if err != nil {
-		return Issue{}, err
-	}
-	return q.Issue, nil
-}
-
-// Query struct for getting current user
-type ViewerQuery struct {
-	Viewer User `graphql:"viewer"`
-}
-
-// IssuePayload is the return type for issueUpdate mutation
-type IssuePayload struct {
-	Issue   Issue           `graphql:"issue"`
-	Success graphql.Boolean `graphql:"success"`
-}
-
-type IssueUpdateInput struct {
-	Title       graphql.String `json:"title,omitempty"`
-	Description graphql.String `json:"description,omitempty"`
-	AssigneeID  graphql.ID     `json:"assigneeId,omitempty"`
-	StateID     graphql.ID     `json:"stateId,omitempty"`
-}
-
-type IssueCreateInput struct {
-	Title       graphql.String `json:"title"`
-	Description graphql.String `json:"description"`
-	TeamID      graphql.ID     `json:"teamId"`
-}
-
-type IssueCreateMutation struct {
-	Issue   Issue           `graphql:"issue"`
-	Success graphql.Boolean `graphql:"success"`
-}
-
-// RPC-style method to get current user
-func (c *Client) GetViewer(ctx context.Context) (User, error) {
-	var q ViewerQuery
-	err := c.client.Query(ctx, &q, nil)
-	if err != nil {
-		return User{}, err
-	}
-	return q.Viewer, nil
-}
-
-// RPC-style method to assign issue to user
-func (c *Client) AssignIssue(ctx context.Context, id string, assigneeID string) error {
-	// First get the issue to get team ID
-	issue, err := c.GetIssue(ctx, id)
-	if err != nil {
-		return err
-	}
-	teamID := issue.Team.ID.(string)
-
-	// Get workflow states for the team
-	states, err := c.GetWorkflowStates(ctx, teamID)
-	if err != nil {
-		return err
-	}
-
-	// Find "In Progress" state
-	var inProgressID graphql.ID
-	for _, state := range states {
-		if string(state.Name) == "In Progress" {
-			inProgressID = state.ID
-			break
-		}
-	}
-	if inProgressID == "" {
-		return errors.New("in progress state not found")
-	}
-
-	var m struct {
-		IssueUpdate IssuePayload `graphql:"issueUpdate(id: $id, input: $input)"`
-	}
-	variables := map[string]any{
-		"id": graphql.String(id),
-		"input": IssueUpdateInput{
-			AssigneeID: graphql.ID(assigneeID),
-			StateID:    inProgressID,
-		},
-	}
-	return c.client.Mutate(ctx, &m, variables)
-}
-
-// RPC-style method to update issue state
-func (c *Client) UpdateIssueState(ctx context.Context, id string, stateID string) error {
-	var m struct {
-		IssueUpdate IssuePayload `graphql:"issueUpdate(id: $id, input: $input)"`
-	}
-	variables := map[string]any{
-		"id": graphql.String(id),
-		"input": IssueUpdateInput{
-			StateID: graphql.ID(stateID),
-		},
-	}
-	return c.client.Mutate(ctx, &m, variables)
-}
-
-// Query struct for getting issues assigned to current user
-type AssignedIssuesQuery struct {
-	Viewer struct {
-		AssignedIssues struct {
-			Nodes []Issue `graphql:"nodes"`
-		} `graphql:"assignedIssues"`
-	} `graphql:"viewer"`
-}
-
-// RPC-style method to get issues assigned to current user
-func (c *Client) GetAssignedIssues(ctx context.Context) ([]Issue, error) {
-	var q AssignedIssuesQuery
-	err := c.client.Query(ctx, &q, nil)
-	if err != nil {
-		return nil, err
-	}
-	return q.Viewer.AssignedIssues.Nodes, nil
-}
-
-// Query struct for getting workflow states
-type WorkflowStatesQuery struct {
-	WorkflowStates struct {
-		Nodes []WorkflowState `graphql:"nodes"`
-	} `graphql:"workflowStates(filter: {team: {id: {eq: $teamId}}})"`
-}
-
-// RPC-style method to get workflow states for a team
-func (c *Client) GetWorkflowStates(ctx context.Context, teamID string) ([]WorkflowState, error) {
-	var q WorkflowStatesQuery
-	variables := map[string]any{
-		"teamId": graphql.ID(teamID),
-	}
-	err := c.client.Query(ctx, &q, variables)
-	if err != nil {
-		return nil, err
-	}
-	return q.WorkflowStates.Nodes, nil
-}
-
-func (c *Client) CreateIssue(ctx context.Context, title, description, teamID string) (Issue, error) {
-	var m struct {
-		IssueCreate IssueCreateMutation `graphql:"issueCreate(input: $input)"`
-	}
-	variables := map[string]any{
-		"input": IssueCreateInput{
-			Title:       graphql.String(title),
-			Description: graphql.String(description),
-			TeamID:      graphql.ID(teamID),
-		},
-	}
-	if err := c.client.Mutate(ctx, &m, variables); err != nil {
-		return Issue{}, err
-	}
-	return m.IssueCreate.Issue, nil
-}
-
-func (c *Client) UpdateIssue(ctx context.Context, id, title, description string) (Issue, error) {
-	var m struct {
-		IssueUpdate IssuePayload `graphql:"issueUpdate(id: $id, input: $input)"`
-	}
-	input := IssueUpdateInput{}
-	if title != "" {
-		input.Title = graphql.String(title)
-	}
-	if description != "" {
-		input.Description = graphql.String(description)
-	}
-	variables := map[string]any{
-		"id":    graphql.String(id),
-		"input": input,
-	}
-	if err := c.client.Mutate(ctx, &m, variables); err != nil {
-		return Issue{}, err
-	}
-	return m.IssueUpdate.Issue, nil
+func graphQLIDString(value graphql.ID) (string, bool) {
+	id, ok := value.(string)
+	return id, ok && id != ""
 }
