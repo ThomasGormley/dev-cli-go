@@ -67,9 +67,12 @@ func (f *fakeLinearClient) CreateIssue(_ context.Context, input linear.IssueCrea
 	return f.issue, f.err
 }
 
-func (f *fakeLinearClient) GetIssue(_ context.Context, id string) (linear.Issue, error) {
+func (f *fakeLinearClient) FindIssue(_ context.Context, id string) (linear.Issue, bool, error) {
 	f.getID = id
-	return f.issue, f.err
+	if f.err != nil {
+		return linear.Issue{}, false, f.err
+	}
+	return f.issue, f.issue.ID != nil, nil
 }
 
 func (f *fakeLinearClient) UpdateIssue(
@@ -104,12 +107,12 @@ func (f *fakeLinearClient) ListLabels(
 	return f.labelPage, nil
 }
 
-func (f *fakeLinearClient) ResolveTeam(_ context.Context, selector string) (linear.Team, error) {
+func (f *fakeLinearClient) FindTeam(_ context.Context, selector string) (linear.Team, bool, error) {
 	f.resolveTerm = selector
 	if f.resolveErr != nil {
-		return linear.Team{}, f.resolveErr
+		return linear.Team{}, false, f.resolveErr
 	}
-	return f.resolveTeam, nil
+	return f.resolveTeam, f.resolveTeam.ID != nil, nil
 }
 
 func (f *fakeLinearClient) ListProjects(
@@ -125,13 +128,13 @@ func (f *fakeLinearClient) ListProjects(
 	return f.projects, nil
 }
 
-func (f *fakeLinearClient) ResolveProject(_ context.Context, teamID string, selector string) (linear.Project, error) {
+func (f *fakeLinearClient) FindProject(_ context.Context, teamID string, selector string) (linear.Project, bool, error) {
 	f.projectTeam = teamID
 	f.projectTerm = selector
 	if f.resolveProjectErr != nil {
-		return linear.Project{}, f.resolveProjectErr
+		return linear.Project{}, false, f.resolveProjectErr
 	}
-	return f.resolveProject, nil
+	return f.resolveProject, f.resolveProject.ID != nil, nil
 }
 
 func (f *fakeLinearClient) ListUsers(
@@ -147,23 +150,23 @@ func (f *fakeLinearClient) ListUsers(
 	return f.userPage, nil
 }
 
-func (f *fakeLinearClient) ResolveAssignee(_ context.Context, teamID, selector string) (linear.User, error) {
+func (f *fakeLinearClient) FindAssignee(_ context.Context, teamID, selector string) (linear.User, bool, error) {
 	f.resolveUserTeamID = teamID
 	f.resolveUserTerm = selector
 	if f.resolveUserErr != nil {
-		return linear.User{}, f.resolveUserErr
+		return linear.User{}, false, f.resolveUserErr
 	}
-	return f.resolveUser, nil
+	return f.resolveUser, f.resolveUser.ID != nil, nil
 }
 
-func (f *fakeLinearClient) ResolveLabel(_ context.Context, teamID, selector string) (linear.Label, error) {
+func (f *fakeLinearClient) FindLabel(_ context.Context, teamID, selector string) (linear.Label, bool, error) {
 	f.labelTeams = append(f.labelTeams, teamID)
 	f.labelTerms = append(f.labelTerms, selector)
 	label, ok := f.resolveLabels[selector]
 	if !ok {
-		return linear.Label{}, &linear.LabelNotFoundError{Selector: selector}
+		return linear.Label{}, false, nil
 	}
-	return label, nil
+	return label, true, nil
 }
 
 func (f *fakeLinearClient) ListProjectMilestones(
@@ -179,17 +182,17 @@ func (f *fakeLinearClient) ListProjectMilestones(
 	return f.milestones, nil
 }
 
-func (f *fakeLinearClient) ResolveProjectMilestone(
+func (f *fakeLinearClient) FindProjectMilestone(
 	_ context.Context,
 	projectID string,
 	selector string,
-) (linear.ProjectMilestone, error) {
+) (linear.ProjectMilestone, bool, error) {
 	f.milestoneProject = projectID
 	f.milestoneTerm = selector
 	if f.resolveMilestoneErr != nil {
-		return linear.ProjectMilestone{}, f.resolveMilestoneErr
+		return linear.ProjectMilestone{}, false, f.resolveMilestoneErr
 	}
-	return f.resolveMilestone, nil
+	return f.resolveMilestone, f.resolveMilestone.ID != nil, nil
 }
 
 func newLinearIssue() linear.Issue {
@@ -286,8 +289,8 @@ func TestHandleLinearUpdateSupportsDescriptionFileAndClear(t *testing.T) {
 		t.Fatalf("update returned error: %v", err)
 	}
 	if client.updateID != "DEV-123" ||
-		client.updateInput.Description == nil ||
-		*client.updateInput.Description != "from a file" {
+		!client.updateInput.SetDescription ||
+		client.updateInput.Description != "from a file" {
 		t.Errorf("unexpected file update: id=%q input=%+v", client.updateID, client.updateInput)
 	}
 	assertIssueOutput(t, stdout.Bytes())
@@ -303,7 +306,7 @@ func TestHandleLinearUpdateSupportsDescriptionFileAndClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clear description returned error: %v", err)
 	}
-	if !client.updateInput.ClearDescription || client.updateInput.Description != nil {
+	if !client.updateInput.ClearDescription || client.updateInput.SetDescription {
 		t.Errorf("unexpected clear-description input: %+v", client.updateInput)
 	}
 }
@@ -383,7 +386,7 @@ func TestHandleLinearCreateResolvesTeamFlagBeforeMutation(t *testing.T) {
 		t.Errorf("expected --team to take precedence, got %q", client.resolveTerm)
 	}
 	if client.createInput.TeamID != "team-uuid" {
-		t.Errorf("expected resolved team UUID, got %q", client.createInput.TeamID)
+		t.Errorf("expected resolved team selector, got %q", client.createInput.TeamID)
 	}
 
 	var output struct {
@@ -738,7 +741,7 @@ func TestHandleLinearUpdateResolvesAndClearsProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update returned error: %v", err)
 	}
-	if client.updateInput.ProjectID == nil || *client.updateInput.ProjectID != "project-uuid" ||
+	if !client.updateInput.SetProject || client.updateInput.ProjectID != "project-uuid" ||
 		client.updateInput.ClearProject || client.projectTeam != "team-uuid" || client.projectTerm != "agent-work" {
 		t.Errorf(
 			"unexpected project update: input=%+v team=%q selector=%q",
@@ -769,7 +772,7 @@ func TestHandleLinearUpdateResolvesAndClearsProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clear project returned error: %v", err)
 	}
-	if !client.updateInput.ClearProject || client.updateInput.ProjectID != nil {
+	if !client.updateInput.ClearProject || client.updateInput.SetProject {
 		t.Errorf("unexpected clear-project input: %+v", client.updateInput)
 	}
 	var clearedOutput struct {
@@ -868,11 +871,12 @@ func TestHandleLinearUpdateProjectMilestones(t *testing.T) {
 				t.Fatalf("update returned error: %v", err)
 			}
 			if tt.wantProjectID != "" &&
-				(client.updateInput.ProjectID == nil || *client.updateInput.ProjectID != tt.wantProjectID) {
+				(!client.updateInput.SetProject || client.updateInput.ProjectID != tt.wantProjectID) {
 				t.Errorf("unexpected project input: %+v", client.updateInput)
 			}
 			if tt.wantMilestoneID != "" &&
-				(client.updateInput.ProjectMilestoneID == nil || *client.updateInput.ProjectMilestoneID != tt.wantMilestoneID) {
+				(!client.updateInput.SetProjectMilestone ||
+					client.updateInput.ProjectMilestoneID != tt.wantMilestoneID) {
 				t.Errorf("unexpected milestone input: %+v", client.updateInput)
 			}
 			if client.updateInput.ClearProject != tt.wantClearProject ||
@@ -999,11 +1003,8 @@ func TestHandleLinearCreateReportsProjectResolutionErrors(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "token")
 	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
 	client := &fakeLinearClient{
-		resolveTeam: team,
-		resolveProjectErr: &linear.ProjectAmbiguousError{Selector: "agent", Candidates: []linear.Project{
-			{ID: "project-one", Name: "Agent", SlugID: "agent-one"},
-			{ID: "project-two", Name: "Agent", SlugID: "agent-two"},
-		}},
+		resolveTeam:       team,
+		resolveProjectErr: errors.New("multiple active projects match \"agent\""),
 	}
 	withLinearClient(t, client)
 
@@ -1043,8 +1044,7 @@ func TestHandleLinearCreateResolvesAssigneeAndPriority(t *testing.T) {
 		t.Fatalf("create returned error: %v", err)
 	}
 	if client.resolveUserTeamID != "team-uuid" || client.resolveUserTerm != "me" ||
-		client.createInput.AssigneeID != "user-uuid" || client.createInput.Priority == nil ||
-		*client.createInput.Priority != linearPriorityHigh {
+		client.createInput.AssigneeID != "user-uuid" || client.createInput.Priority != linearPriorityHigh {
 		t.Errorf("unexpected create input: %+v, user selector=%q team=%q", client.createInput,
 			client.resolveUserTerm, client.resolveUserTeamID)
 	}
@@ -1131,8 +1131,8 @@ func TestHandleLinearUpdateSupportsCombinedAssigneeAndPriorityMutations(t *testi
 		t.Fatalf("update returned error: %v", err)
 	}
 	if client.getID != "DEV-123" || client.resolveUserTeamID != "team-uuid" ||
-		client.updateInput.AssigneeID == nil || *client.updateInput.AssigneeID != "user-uuid" ||
-		client.updateInput.Priority == nil || *client.updateInput.Priority != linearPriorityLow {
+		!client.updateInput.SetAssignee || client.updateInput.AssigneeID != "user-uuid" ||
+		!client.updateInput.SetPriority || client.updateInput.Priority != linearPriorityLow {
 		t.Errorf("unexpected combined update: get=%q input=%+v", client.getID, client.updateInput)
 	}
 }
@@ -1153,8 +1153,8 @@ func TestHandleLinearUpdateClearsAssigneeAndSetsNoPriority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update returned error: %v", err)
 	}
-	if !client.updateInput.ClearAssignee || client.updateInput.AssigneeID != nil ||
-		client.updateInput.Priority == nil || *client.updateInput.Priority != linearPriorityNone {
+	if !client.updateInput.ClearAssignee || client.updateInput.SetAssignee ||
+		!client.updateInput.SetPriority || client.updateInput.Priority != linearPriorityNone {
 		t.Errorf("unexpected clear update input: %+v", client.updateInput)
 	}
 	if client.getID != "" || client.resolveUserTerm != "" {
@@ -1194,14 +1194,8 @@ func TestHandleLinearCreateReportsAssigneeResolutionErrors(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "token")
 	team := linear.Team{ID: "team-uuid", Key: "DEV", Name: "Development"}
 	client := &fakeLinearClient{
-		resolveTeam: team,
-		resolveUserErr: &linear.UserAmbiguousError{
-			Selector: "Alex",
-			Candidates: []linear.User{
-				{ID: "user-one", Name: "Alex", DisplayName: "Alex One", Email: "one@example.com", Active: true},
-				{ID: "user-two", Name: "Alex", DisplayName: "Alex Two", Email: "two@example.com", Active: true},
-			},
-		},
+		resolveTeam:    team,
+		resolveUserErr: errors.New("multiple active team members match \"Alex\""),
 	}
 	withLinearClient(t, client)
 
@@ -1221,21 +1215,6 @@ func TestHandleLinearCreateReportsAssigneeResolutionErrors(t *testing.T) {
 		t.Errorf("expected no mutation calls, got %d", client.createCalls)
 	}
 
-	var output struct {
-		Error struct {
-			Candidates []struct {
-				ID    string `json:"id"`
-				Email string `json:"email"`
-			} `json:"candidates"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(stderr.Bytes(), &output); err != nil {
-		t.Fatalf("decode error response: %v", err)
-	}
-	if len(output.Error.Candidates) != 2 || output.Error.Candidates[0].ID != "user-one" ||
-		output.Error.Candidates[1].Email != "two@example.com" {
-		t.Errorf("unexpected candidates: %+v", output.Error.Candidates)
-	}
 }
 
 func TestLinearPriorityNames(t *testing.T) {
@@ -1266,29 +1245,26 @@ func TestLinearPriorityNames(t *testing.T) {
 
 func TestHandleLinearCreateReportsTeamResolutionErrors(t *testing.T) {
 	tests := []struct {
-		name       string
-		resolveErr error
-		wantCode   string
+		name        string
+		resolveErr  error
+		resolveTeam linear.Team
+		wantCode    string
 	}{
 		{
-			name:       "not found",
-			resolveErr: &linear.TeamNotFoundError{Selector: "missing"},
-			wantCode:   "team_not_found",
+			name:     "not found",
+			wantCode: "team_not_found",
 		},
 		{
-			name: "ambiguous",
-			resolveErr: &linear.TeamAmbiguousError{Selector: "platform", Candidates: []linear.Team{
-				{ID: "team-one", Key: "PLAT", Name: "Platform"},
-				{ID: "team-two", Key: "PLATFORM", Name: "Platform"},
-			}},
-			wantCode: "ambiguous_team",
+			name:       "ambiguous",
+			resolveErr: errors.New("multiple active teams match \"platform\""),
+			wantCode:   "ambiguous_team",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("LINEAR_API_KEY", "token")
-			client := &fakeLinearClient{resolveErr: tt.resolveErr}
+			client := &fakeLinearClient{resolveErr: tt.resolveErr, resolveTeam: tt.resolveTeam}
 			withLinearClient(t, client)
 
 			var stdout bytes.Buffer
@@ -1661,9 +1637,9 @@ func TestLinearCommandsKeepComposedIssueShape(t *testing.T) {
 	if got, want := client.createInput.LabelIDs, []string{"label-bug", "label-platform"}; !slices.Equal(got, want) {
 		t.Errorf("expected resolved create labels %v, got %v", want, got)
 	}
-	if client.updateInput.AssigneeID == nil || *client.updateInput.AssigneeID != "user-uuid" ||
-		client.updateInput.ProjectID == nil || *client.updateInput.ProjectID != "project-uuid" ||
-		client.updateInput.ProjectMilestoneID == nil || *client.updateInput.ProjectMilestoneID != "milestone-uuid" {
+	if !client.updateInput.SetAssignee || client.updateInput.AssigneeID != "user-uuid" ||
+		!client.updateInput.SetProject || client.updateInput.ProjectID != "project-uuid" ||
+		!client.updateInput.SetProjectMilestone || client.updateInput.ProjectMilestoneID != "milestone-uuid" {
 		t.Errorf("unexpected composed update input: %+v", client.updateInput)
 	}
 }

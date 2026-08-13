@@ -202,10 +202,10 @@ var newLinearClient = func() linear.Clienter {
 
 func linearCreateFlags() []cli.Flag {
 	return append(linearMutationFlags(),
-		&cli.StringFlag{Name: "team", Usage: "team UUID, key, or exact name"},
-		&cli.StringFlag{Name: "project", Usage: "project UUID, slug, or exact name"},
-		&cli.StringSliceFlag{Name: "label", Usage: "label UUID or exact name (repeatable)"},
-		&cli.StringFlag{Name: "milestone", Usage: "project milestone UUID or exact name"},
+		&cli.StringFlag{Name: "team", Usage: "team key or exact name"},
+		&cli.StringFlag{Name: "project", Usage: "project slug or exact name"},
+		&cli.StringSliceFlag{Name: "label", Usage: "label exact name (repeatable)"},
+		&cli.StringFlag{Name: "milestone", Usage: "project milestone exact name"},
 		&cli.BoolFlag{Name: "dry-run", Usage: "validate and print the mutation input without creating an issue"},
 	)
 }
@@ -219,7 +219,7 @@ func linearTeamListFlags() []cli.Flag {
 
 func linearProjectListFlags() []cli.Flag {
 	return []cli.Flag{
-		&cli.StringFlag{Name: "team", Usage: "team UUID, key, or exact name"},
+		&cli.StringFlag{Name: "team", Usage: "team key or exact name"},
 		&cli.IntFlag{Name: "limit", Value: 50, Usage: "maximum number of projects to return"},
 		&cli.StringFlag{Name: "cursor", Usage: "cursor from a previous project list response"},
 	}
@@ -227,7 +227,7 @@ func linearProjectListFlags() []cli.Flag {
 
 func linearLabelListFlags() []cli.Flag {
 	return []cli.Flag{
-		&cli.StringFlag{Name: "team", Usage: "team UUID, key, or exact name"},
+		&cli.StringFlag{Name: "team", Usage: "team key or exact name"},
 		&cli.IntFlag{Name: "limit", Value: 50, Usage: "maximum number of labels to return"},
 		&cli.StringFlag{Name: "cursor", Usage: "cursor from a previous label list response"},
 	}
@@ -235,8 +235,8 @@ func linearLabelListFlags() []cli.Flag {
 
 func linearProjectMilestoneListFlags() []cli.Flag {
 	return []cli.Flag{
-		&cli.StringFlag{Name: "team", Usage: "team UUID, key, or exact name"},
-		&cli.StringFlag{Name: "project", Usage: "project UUID, slug, or exact name"},
+		&cli.StringFlag{Name: "team", Usage: "team key or exact name"},
+		&cli.StringFlag{Name: "project", Usage: "project slug or exact name"},
 		&cli.IntFlag{Name: "limit", Value: 50, Usage: "maximum number of project milestones to return"},
 		&cli.StringFlag{Name: "cursor", Usage: "cursor from a previous project milestone list response"},
 	}
@@ -244,7 +244,7 @@ func linearProjectMilestoneListFlags() []cli.Flag {
 
 func linearUserListFlags() []cli.Flag {
 	return []cli.Flag{
-		&cli.StringFlag{Name: "team", Usage: "team UUID, key, or exact name"},
+		&cli.StringFlag{Name: "team", Usage: "team key or exact name"},
 		&cli.IntFlag{Name: "limit", Value: 50, Usage: "maximum number of active team members to return"},
 		&cli.StringFlag{Name: "cursor", Usage: "cursor from a previous user list response"},
 	}
@@ -253,13 +253,13 @@ func linearUserListFlags() []cli.Flag {
 func linearUpdateFlags() []cli.Flag {
 	return append(linearMutationFlags(),
 		&cli.BoolFlag{Name: "clear-description", Usage: "clear the issue description"},
-		&cli.StringFlag{Name: "project", Usage: "project UUID, slug, or exact name"},
+		&cli.StringFlag{Name: "project", Usage: "project slug or exact name"},
 		&cli.BoolFlag{Name: "clear-project", Usage: "remove the issue from its project"},
 		&cli.BoolFlag{Name: "clear-assignee", Usage: "remove the issue assignee"},
-		&cli.StringSliceFlag{Name: "add-label", Usage: "label UUID or exact name to add (repeatable)"},
-		&cli.StringSliceFlag{Name: "remove-label", Usage: "label UUID or exact name to remove (repeatable)"},
+		&cli.StringSliceFlag{Name: "add-label", Usage: "label exact name to add (repeatable)"},
+		&cli.StringSliceFlag{Name: "remove-label", Usage: "label exact name to remove (repeatable)"},
 		&cli.BoolFlag{Name: "clear-labels", Usage: "remove all issue labels"},
-		&cli.StringFlag{Name: "milestone", Usage: "project milestone UUID or exact name"},
+		&cli.StringFlag{Name: "milestone", Usage: "project milestone exact name"},
 		&cli.BoolFlag{Name: "clear-milestone", Usage: "remove the issue from its project milestone"},
 		&cli.BoolFlag{Name: "dry-run", Usage: "validate and print the mutation input without updating the issue"},
 	)
@@ -270,7 +270,7 @@ func linearMutationFlags() []cli.Flag {
 		&cli.StringFlag{Name: "title", Usage: "title of the issue"},
 		&cli.StringFlag{Name: "description", Usage: "description of the issue"},
 		&cli.StringFlag{Name: "description-file", Usage: "read the description from a file or stdin (-)"},
-		&cli.StringFlag{Name: "assignee", Usage: "assignee UUID, email, exact name, or me"},
+		&cli.StringFlag{Name: "assignee", Usage: "assignee email, exact name, or me"},
 		&cli.StringFlag{Name: "priority", Usage: "priority name: none, urgent, high, medium, or low"},
 	}
 }
@@ -303,9 +303,12 @@ func handleLinearCreate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 			return exitLinearError(stderr, err)
 		}
 		client := newLinearClient()
-		team, err := client.ResolveTeam(c.Context, selector)
+		team, found, err := client.FindTeam(c.Context, selector)
 		if err != nil {
 			return exitLinearError(stderr, linearTeamResolutionError(err))
+		}
+		if !found {
+			return exitLinearError(stderr, linearTeamNotFound(selector))
 		}
 		resolvedTeam, err := newLinearTeamOutput(team)
 		if err != nil {
@@ -334,7 +337,7 @@ func handleLinearCreate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		if err != nil {
 			return exitLinearError(stderr, err)
 		}
-		priority, err := linearFlagPriority(c)
+		priority, hasPriority, err := linearFlagPriority(c)
 		if err != nil {
 			return exitLinearError(stderr, err)
 		}
@@ -347,7 +350,9 @@ func handleLinearCreate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		if assignee != nil {
 			input.AssigneeID = assignee.ID
 		}
-		input.Priority = priority
+		if hasPriority {
+			input.Priority = priority
+		}
 		if hasProject {
 			input.ProjectID = resolvedProject.ID
 		}
@@ -376,7 +381,7 @@ func handleLinearCreate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 					ProjectMilestone: optionalLinearProjectMilestone(resolvedMilestone, hasMilestone),
 					Labels:           labelOutputs,
 					Assignee:         assignee,
-					Priority:         linearPriorityNameFromPointer(priority),
+					Priority:         linearPriorityNameFromValue(priority, hasPriority),
 				},
 			})
 		}
@@ -412,9 +417,12 @@ func handleLinearLabelList(stdout, stderr io.Writer) cli.ActionFunc {
 			return exitLinearError(stderr, err)
 		}
 		client := newLinearClient()
-		team, err := client.ResolveTeam(c.Context, selector)
+		team, found, err := client.FindTeam(c.Context, selector)
 		if err != nil {
 			return exitLinearError(stderr, linearTeamResolutionError(err))
+		}
+		if !found {
+			return exitLinearError(stderr, linearTeamNotFound(selector))
 		}
 		teamOutput, err := newLinearTeamOutput(team)
 		if err != nil {
@@ -473,9 +481,12 @@ func handleLinearProjectList(stdout, stderr io.Writer) cli.ActionFunc {
 		}
 
 		client := newLinearClient()
-		team, err := client.ResolveTeam(c.Context, selector)
+		team, found, err := client.FindTeam(c.Context, selector)
 		if err != nil {
 			return exitLinearError(stderr, linearTeamResolutionError(err))
+		}
+		if !found {
+			return exitLinearError(stderr, linearTeamNotFound(selector))
 		}
 		teamOutput, err := newLinearTeamOutput(team)
 		if err != nil {
@@ -514,9 +525,12 @@ func handleLinearProjectMilestoneList(stdout, stderr io.Writer) cli.ActionFunc {
 			return exitLinearError(stderr, err)
 		}
 		client := newLinearClient()
-		team, err := client.ResolveTeam(c.Context, teamSelector)
+		team, found, err := client.FindTeam(c.Context, teamSelector)
 		if err != nil {
 			return exitLinearError(stderr, linearTeamResolutionError(err))
+		}
+		if !found {
+			return exitLinearError(stderr, linearTeamNotFound(teamSelector))
 		}
 		teamOutput, err := newLinearTeamOutput(team)
 		if err != nil {
@@ -554,9 +568,12 @@ func handleLinearUserList(stdout, stderr io.Writer) cli.ActionFunc {
 			return exitLinearError(stderr, err)
 		}
 		client := newLinearClient()
-		team, err := client.ResolveTeam(c.Context, selector)
+		team, found, err := client.FindTeam(c.Context, selector)
 		if err != nil {
 			return exitLinearError(stderr, linearTeamResolutionError(err))
+		}
+		if !found {
+			return exitLinearError(stderr, linearTeamNotFound(selector))
 		}
 		teamOutput, err := newLinearTeamOutput(team)
 		if err != nil {
@@ -586,9 +603,12 @@ func handleLinearGet(stdout, stderr io.Writer) cli.ActionFunc {
 			return exitLinearError(stderr, err)
 		}
 
-		issue, err := newLinearClient().GetIssue(c.Context, issueID)
+		issue, found, err := newLinearClient().FindIssue(c.Context, issueID)
 		if err != nil {
-			return exitLinearError(stderr, linearAPIError("failed to get issue", err))
+			return exitLinearError(stderr, linearAPIError("failed to find issue", err))
+		}
+		if !found {
+			return exitLinearError(stderr, linearIssueNotFound(issueID))
 		}
 		team, err := newLinearTeamOutput(issue.Team)
 		if err != nil {
@@ -663,7 +683,7 @@ func handleLinearUpdate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 					resolvedLabels,
 					resolvedAssignee,
 					c.IsSet("assignee") || input.ClearAssignee,
-					linearPriorityNameFromPointer(input.Priority),
+					linearPriorityNameFromValue(input.Priority, input.SetPriority),
 				),
 			)
 		}
@@ -692,9 +712,12 @@ func resolveLinearUpdateLabels(
 	if len(input.AddedLabelIDs) == 0 && len(input.RemovedLabelIDs) == 0 {
 		return input, nil, nil
 	}
-	issue, err := client.GetIssue(ctx, issueID)
+	issue, found, err := client.FindIssue(ctx, issueID)
 	if err != nil {
-		return linear.UpdateIssueRequest{}, nil, linearAPIError("failed to get issue for label resolution", err)
+		return linear.UpdateIssueRequest{}, nil, linearAPIError("failed to find issue for label resolution", err)
+	}
+	if !found {
+		return linear.UpdateIssueRequest{}, nil, linearIssueNotFound(issueID)
 	}
 	team, err := newLinearTeamOutput(issue.Team)
 	if err != nil {
@@ -781,24 +804,27 @@ func linearUpdateInput(c *cli.Context, stdin io.Reader) (linear.UpdateIssueReque
 		if title == "" {
 			return linear.UpdateIssueRequest{}, invalidLinearArguments("--title cannot be empty")
 		}
-		input.Title = &title
+		input.Title = title
+		input.SetTitle = true
 	}
 	if c.IsSet("description") || c.IsSet("description-file") {
-		input.Description = &description
+		input.Description = description
+		input.SetDescription = true
 	}
-	priority, err := linearFlagPriority(c)
+	priority, hasPriority, err := linearFlagPriority(c)
 	if err != nil {
 		return linear.UpdateIssueRequest{}, err
 	}
 	input.Priority = priority
+	input.SetPriority = hasPriority
 	return input, nil
 }
 
 func hasLinearUpdate(input linear.UpdateIssueRequest) bool {
-	return input.Title != nil || input.Description != nil || input.ClearDescription ||
-		input.ProjectID != nil || input.ClearProject || input.ProjectMilestoneID != nil || input.ClearProjectMilestone ||
+	return input.SetTitle || input.SetDescription || input.ClearDescription ||
+		input.SetProject || input.ClearProject || input.SetProjectMilestone || input.ClearProjectMilestone ||
 		len(input.AddedLabelIDs) > 0 || len(input.RemovedLabelIDs) > 0 || input.ClearLabels ||
-		input.AssigneeID != nil || input.ClearAssignee || input.Priority != nil
+		input.SetAssignee || input.ClearAssignee || input.SetPriority
 }
 
 func linearProjectUpdate(c *cli.Context) (linearProjectChange, error) {
@@ -881,7 +907,8 @@ func applyLinearProjectMilestoneChanges(
 		}, nil
 	}
 
-	input.ProjectID = &project.ID
+	input.ProjectID = project.ID
+	input.SetProject = true
 	return input, linearResolvedProjectChange{
 		Project:          &project,
 		ProjectMilestone: optionalLinearProjectMilestone(resolvedMilestone, hasMilestone),
@@ -895,9 +922,12 @@ func resolveLinearUpdateProject(
 	issueID string,
 	change linearProjectChange,
 ) (linear.Issue, linearProjectOutput, error) {
-	issue, err := client.GetIssue(ctx, issueID)
+	issue, found, err := client.FindIssue(ctx, issueID)
 	if err != nil {
-		return linear.Issue{}, linearProjectOutput{}, linearAPIError("failed to get issue for project resolution", err)
+		return linear.Issue{}, linearProjectOutput{}, linearAPIError("failed to find issue for project resolution", err)
+	}
+	if !found {
+		return linear.Issue{}, linearProjectOutput{}, linearIssueNotFound(issueID)
 	}
 	if change.Selector == "" {
 		if issue.Project.ID == nil {
@@ -935,7 +965,8 @@ func applyLinearMilestoneChange(
 	if err != nil {
 		return linear.UpdateIssueRequest{}, linearProjectMilestoneOutput{}, false, err
 	}
-	input.ProjectMilestoneID = &milestone.ID
+	input.ProjectMilestoneID = milestone.ID
+	input.SetProjectMilestone = true
 	return input, milestone, found, nil
 }
 
@@ -978,9 +1009,12 @@ func resolveLinearProject(
 	if selector == "" {
 		return linearProjectOutput{}, false, invalidLinearArguments("--project cannot be empty")
 	}
-	project, err := client.ResolveProject(ctx, teamID, selector)
+	project, found, err := client.FindProject(ctx, teamID, selector)
 	if err != nil {
 		return linearProjectOutput{}, false, linearProjectResolutionError(err)
+	}
+	if !found {
+		return linearProjectOutput{}, false, linearProjectNotFound(selector)
 	}
 	output, err := newLinearProjectOutput(project)
 	if err != nil {
@@ -1000,9 +1034,12 @@ func resolveLinearLabels(
 		if selector == "" {
 			return nil, invalidLinearArguments("label selectors cannot be empty")
 		}
-		label, err := client.ResolveLabel(ctx, teamID, selector)
+		label, found, err := client.FindLabel(ctx, teamID, selector)
 		if err != nil {
 			return nil, linearLabelResolutionError(err)
+		}
+		if !found {
+			return nil, linearLabelNotFound(selector)
 		}
 		if !containsLinearLabel(labels, label) {
 			labels = append(labels, label)
@@ -1019,9 +1056,12 @@ func resolveLinearAssignee(c *cli.Context, client linear.Clienter, teamID string
 	if selector == "" {
 		return nil, invalidLinearArguments("--assignee cannot be empty")
 	}
-	user, err := client.ResolveAssignee(c.Context, teamID, selector)
+	user, found, err := client.FindAssignee(c.Context, teamID, selector)
 	if err != nil {
 		return nil, linearUserResolutionError(err)
+	}
+	if !found {
+		return nil, linearUserNotFound(selector)
 	}
 	output, err := newLinearUserOutput(user)
 	if err != nil {
@@ -1039,9 +1079,12 @@ func resolveLinearUpdateAssignee(
 	if !c.IsSet("assignee") {
 		return input, nil, nil
 	}
-	issue, err := client.GetIssue(c.Context, issueID)
+	issue, found, err := client.FindIssue(c.Context, issueID)
 	if err != nil {
-		return linear.UpdateIssueRequest{}, nil, linearAPIError("failed to get issue for assignee resolution", err)
+		return linear.UpdateIssueRequest{}, nil, linearAPIError("failed to find issue for assignee resolution", err)
+	}
+	if !found {
+		return linear.UpdateIssueRequest{}, nil, linearIssueNotFound(issueID)
 	}
 	team, err := newLinearTeamOutput(issue.Team)
 	if err != nil {
@@ -1051,19 +1094,20 @@ func resolveLinearUpdateAssignee(
 	if err != nil {
 		return linear.UpdateIssueRequest{}, nil, err
 	}
-	input.AssigneeID = &resolvedAssignee.ID
+	input.AssigneeID = resolvedAssignee.ID
+	input.SetAssignee = true
 	return input, resolvedAssignee, nil
 }
 
-func linearFlagPriority(c *cli.Context) (*int, error) {
+func linearFlagPriority(c *cli.Context) (int, bool, error) {
 	if !c.IsSet("priority") {
-		return nil, nil
+		return 0, false, nil
 	}
 	priority, err := linearPriority(c.String("priority"))
 	if err != nil {
-		return nil, err
+		return 0, false, err
 	}
-	return &priority, nil
+	return priority, true, nil
 }
 
 func linearPriority(value string) (int, error) {
@@ -1100,11 +1144,11 @@ func linearPriorityName(value int) string {
 	}
 }
 
-func linearPriorityNameFromPointer(priority *int) *string {
-	if priority == nil {
+func linearPriorityNameFromValue(priority int, ok bool) *string {
+	if !ok {
 		return nil
 	}
-	name := linearPriorityName(*priority)
+	name := linearPriorityName(priority)
 	return &name
 }
 
@@ -1118,12 +1162,12 @@ func ensureDistinctLabelChanges(addedLabels, removedLabels []linear.Label) error
 }
 
 func containsLinearLabel(labels []linear.Label, target linear.Label) bool {
-	targetID, ok := target.ID.(string)
+	targetID, ok := linearGraphQLIDString(target.ID)
 	if !ok {
 		return false
 	}
 	for _, label := range labels {
-		id, ok := label.ID.(string)
+		id, ok := linearGraphQLIDString(label.ID)
 		if ok && id == targetID {
 			return true
 		}
@@ -1137,8 +1181,8 @@ func linearLabelIDs(labels []linear.Label) []string {
 	}
 	ids := make([]string, 0, len(labels))
 	for _, label := range labels {
-		id, ok := label.ID.(string)
-		if !ok || id == "" {
+		id, ok := linearGraphQLIDString(label.ID)
+		if !ok {
 			continue
 		}
 		ids = append(ids, id)
@@ -1163,9 +1207,12 @@ func resolveLinearProjectMilestone(
 	if selector == "" {
 		return linearProjectMilestoneOutput{}, false, invalidLinearArguments("--milestone cannot be empty")
 	}
-	milestone, err := client.ResolveProjectMilestone(ctx, projectID, selector)
+	milestone, found, err := client.FindProjectMilestone(ctx, projectID, selector)
 	if err != nil {
 		return linearProjectMilestoneOutput{}, false, linearProjectMilestoneResolutionError(err)
+	}
+	if !found {
+		return linearProjectMilestoneOutput{}, false, linearProjectMilestoneNotFound(selector)
 	}
 	output, err := newLinearProjectMilestoneOutput(milestone)
 	if err != nil {
@@ -1175,8 +1222,13 @@ func resolveLinearProjectMilestone(
 }
 
 func projectMatchesLinearIssueProject(project linear.Project, projectID string) bool {
-	id, ok := project.ID.(string)
+	id, ok := linearGraphQLIDString(project.ID)
 	return ok && id == projectID
+}
+
+func linearGraphQLIDString(value any) (string, bool) {
+	id, ok := value.(string)
+	return id, ok && id != ""
 }
 
 func linearIssueID(c *cli.Context) (string, error) {
@@ -1202,94 +1254,61 @@ func linearTeamSelector(c *cli.Context) (string, error) {
 }
 
 func linearTeamResolutionError(err error) error {
-	var notFound *linear.TeamNotFoundError
-	if errors.As(err, &notFound) {
-		return &linearCommandError{Code: "team_not_found", Message: notFound.Error(), Err: err}
-	}
-	var ambiguous *linear.TeamAmbiguousError
-	if errors.As(err, &ambiguous) {
-		return &linearCommandError{
-			Code:           "ambiguous_team",
-			Message:        ambiguous.Error(),
-			TeamCandidates: ambiguous.Candidates,
-			Err:            err,
-		}
-	}
-	return linearAPIError("failed to resolve team", err)
+	return linearResolverError("failed to resolve team", "ambiguous_team", err)
 }
 
 func linearProjectResolutionError(err error) error {
-	var notFound *linear.ProjectNotFoundError
-	if errors.As(err, &notFound) {
-		return &linearCommandError{Code: "project_not_found", Message: notFound.Error(), Err: err}
-	}
-	var ambiguous *linear.ProjectAmbiguousError
-	if errors.As(err, &ambiguous) {
-		return &linearCommandError{
-			Code:              "ambiguous_project",
-			Message:           ambiguous.Error(),
-			ProjectCandidates: ambiguous.Candidates,
-			Err:               err,
-		}
-	}
-	return linearAPIError("failed to resolve project", err)
+	return linearResolverError("failed to resolve project", "ambiguous_project", err)
 }
 
 func linearLabelResolutionError(err error) error {
-	var notFound *linear.LabelNotFoundError
-	if errors.As(err, &notFound) {
-		return &linearCommandError{Code: "label_not_found", Message: notFound.Error(), Err: err}
-	}
-	var ambiguous *linear.LabelAmbiguousError
-	if errors.As(err, &ambiguous) {
-		return &linearCommandError{
-			Code:            "ambiguous_label",
-			Message:         ambiguous.Error(),
-			LabelCandidates: ambiguous.Candidates,
-			Err:             err,
-		}
-	}
-	var group *linear.LabelGroupError
-	if errors.As(err, &group) {
-		return &linearCommandError{
-			Code:            "label_group",
-			Message:         group.Error(),
-			LabelCandidates: []linear.Label{group.Label},
-			Err:             err,
-		}
-	}
-	return linearAPIError("failed to resolve label", err)
+	return linearResolverError("failed to resolve label", "invalid_label", err)
 }
 
 func linearProjectMilestoneResolutionError(err error) error {
-	var notFound *linear.ProjectMilestoneNotFoundError
-	if errors.As(err, &notFound) {
-		return &linearCommandError{Code: "milestone_not_found", Message: notFound.Error(), Err: err}
-	}
-	var ambiguous *linear.ProjectMilestoneAmbiguousError
-	if errors.As(err, &ambiguous) {
-		return &linearCommandError{
-			Code:                "ambiguous_milestone",
-			Message:             ambiguous.Error(),
-			MilestoneCandidates: ambiguous.Candidates,
-			Err:                 err,
-		}
-	}
-	return linearAPIError("failed to resolve project milestone", err)
+	return linearResolverError("failed to resolve project milestone", "ambiguous_milestone", err)
 }
 
 func linearUserResolutionError(err error) error {
-	var notFound *linear.UserNotFoundError
-	if errors.As(err, &notFound) {
-		return &linearCommandError{Code: "assignee_not_found", Message: notFound.Error(), Err: err}
+	return linearResolverError("failed to resolve assignee", "ambiguous_assignee", err)
+}
+
+func linearResolverError(apiMessage string, code string, err error) error {
+	var apiErr *linear.APIError
+	if errors.As(err, &apiErr) {
+		return linearAPIError(apiMessage, err)
 	}
-	var ambiguous *linear.UserAmbiguousError
-	if errors.As(err, &ambiguous) {
-		return &linearCommandError{
-			Code: "ambiguous_assignee", Message: ambiguous.Error(), UserCandidates: ambiguous.Candidates, Err: err,
-		}
+	return &linearCommandError{Code: code, Message: err.Error(), Err: err}
+}
+
+func linearTeamNotFound(selector string) error {
+	return &linearCommandError{Code: "team_not_found", Message: fmt.Sprintf("no active team matches %q", selector)}
+}
+
+func linearProjectNotFound(selector string) error {
+	return &linearCommandError{Code: "project_not_found", Message: fmt.Sprintf("no active project matches %q", selector)}
+}
+
+func linearLabelNotFound(selector string) error {
+	return &linearCommandError{Code: "label_not_found", Message: fmt.Sprintf("no applicable label matches %q", selector)}
+}
+
+func linearIssueNotFound(selector string) error {
+	return &linearCommandError{Code: "issue_not_found", Message: fmt.Sprintf("no issue matches %q", selector)}
+}
+
+func linearProjectMilestoneNotFound(selector string) error {
+	return &linearCommandError{
+		Code:    "milestone_not_found",
+		Message: fmt.Sprintf("no project milestone matches %q", selector),
 	}
-	return linearAPIError("failed to resolve assignee", err)
+}
+
+func linearUserNotFound(selector string) error {
+	return &linearCommandError{
+		Code:    "assignee_not_found",
+		Message: fmt.Sprintf("no active team member matches %q", selector),
+	}
 }
 
 func requireLinearAPIKey() error {
@@ -1383,8 +1402,8 @@ func newLinearIssueOutput(
 	fallbackProject *linearProjectOutput,
 	fallbackProjectMilestone *linearProjectMilestoneOutput,
 ) (linearIssueOutput, error) {
-	id, ok := issue.ID.(string)
-	if !ok || id == "" {
+	id, ok := linearGraphQLIDString(issue.ID)
+	if !ok {
 		return linearIssueOutput{}, fmt.Errorf("issue ID is not a string: %T", issue.ID)
 	}
 	project := fallbackProject
@@ -1569,8 +1588,8 @@ func newLinearUserOutputs(users []linear.User) ([]linearUserOutput, error) {
 }
 
 func newLinearUserOutput(user linear.User) (linearUserOutput, error) {
-	id, ok := user.ID.(string)
-	if !ok || id == "" {
+	id, ok := linearGraphQLIDString(user.ID)
+	if !ok {
 		return linearUserOutput{}, fmt.Errorf("user ID is not a string: %T", user.ID)
 	}
 	return linearUserOutput{
@@ -1579,24 +1598,24 @@ func newLinearUserOutput(user linear.User) (linearUserOutput, error) {
 }
 
 func newLinearTeamOutput(team linear.Team) (linearTeamOutput, error) {
-	id, ok := team.ID.(string)
-	if !ok || id == "" {
+	id, ok := linearGraphQLIDString(team.ID)
+	if !ok {
 		return linearTeamOutput{}, fmt.Errorf("team ID is not a string: %T", team.ID)
 	}
 	return linearTeamOutput{ID: id, Key: string(team.Key), Name: string(team.Name)}, nil
 }
 
 func newLinearProjectOutput(project linear.Project) (linearProjectOutput, error) {
-	id, ok := project.ID.(string)
-	if !ok || id == "" {
+	id, ok := linearGraphQLIDString(project.ID)
+	if !ok {
 		return linearProjectOutput{}, fmt.Errorf("project ID is not a string: %T", project.ID)
 	}
 	return linearProjectOutput{ID: id, Name: string(project.Name), SlugID: string(project.SlugID)}, nil
 }
 
 func newLinearProjectMilestoneOutput(milestone linear.ProjectMilestone) (linearProjectMilestoneOutput, error) {
-	id, ok := milestone.ID.(string)
-	if !ok || id == "" {
+	id, ok := linearGraphQLIDString(milestone.ID)
+	if !ok {
 		return linearProjectMilestoneOutput{}, fmt.Errorf("project milestone ID is not a string: %T", milestone.ID)
 	}
 	return linearProjectMilestoneOutput{
@@ -1615,8 +1634,8 @@ func optionalLinearProject(project linearProjectOutput, ok bool) *linearProjectO
 }
 
 func newLinearLabelOutput(label linear.Label) (linearLabelOutput, error) {
-	id, ok := label.ID.(string)
-	if !ok || id == "" {
+	id, ok := linearGraphQLIDString(label.ID)
+	if !ok {
 		return linearLabelOutput{}, fmt.Errorf("label ID is not a string: %T", label.ID)
 	}
 	output := linearLabelOutput{ID: id, Name: string(label.Name), IsGroup: bool(label.IsGroup)}

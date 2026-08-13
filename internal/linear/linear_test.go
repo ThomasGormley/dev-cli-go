@@ -3,7 +3,6 @@ package linear
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -34,7 +33,7 @@ const (
 	testPriorityNone        = 0
 )
 
-func TestClientGetIssueReturnsLabels(t *testing.T) {
+func TestClientFindIssueReturnsLabels(t *testing.T) {
 	requestReceived := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
@@ -46,16 +45,19 @@ func TestClientGetIssueReturnsLabels(t *testing.T) {
 			return
 		}
 		requestReceived <- request.Query
-		_, err := w.Write([]byte(`{"data":{"issue":{"id":"issue-uuid","labels":{"nodes":[{"id":"label-bug","name":"Bug","isGroup":false,"team":{"id":"team-uuid","key":"DEV","name":"Development"}}]}}}}`))
+		_, err := w.Write([]byte(`{"data":{"issues":{"nodes":[{"id":"issue-uuid","labels":{"nodes":[{"id":"label-bug","name":"Bug","isGroup":false,"team":{"id":"team-uuid","key":"DEV","name":"Development"}}]}}]}}}`))
 		if err != nil {
 			t.Errorf("write GraphQL response: %v", err)
 		}
 	}))
 	defer server.Close()
 
-	issue, err := newClient("test-token", server.URL).GetIssue(context.Background(), "DEV-123")
+	issue, found, err := newClient("test-token", server.URL).FindIssue(context.Background(), "DEV-123")
 	if err != nil {
 		t.Fatalf("get issue: %v", err)
+	}
+	if !found {
+		t.Fatal("expected issue to be found")
 	}
 	if len(issue.Labels.Nodes) != 1 || issue.Labels.Nodes[0].ID != "label-bug" ||
 		issue.Labels.Nodes[0].Name != "Bug" {
@@ -265,7 +267,7 @@ func TestClientUpdateIssueClearsProjectMilestone(t *testing.T) {
 	}
 }
 
-func TestClientListAndResolveProjectMilestones(t *testing.T) {
+func TestClientListAndFindProjectMilestones(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
@@ -325,11 +327,11 @@ func TestClientListAndResolveProjectMilestones(t *testing.T) {
 		page.Items[0].Project.ID != "project-uuid" {
 		t.Errorf("unexpected milestone page: %+v", page)
 	}
-	milestone, err := client.ResolveProjectMilestone(context.Background(), "project-uuid", "launch")
+	milestone, found, err := client.FindProjectMilestone(context.Background(), "project-uuid", "launch")
 	if err != nil {
 		t.Fatalf("resolve milestone: %v", err)
 	}
-	if milestone.ID != "milestone-one" || milestone.Name != "Launch" || requests != 3 {
+	if !found || milestone.ID != "milestone-one" || milestone.Name != "Launch" || requests != 3 {
 		t.Errorf("unexpected resolved milestone: %+v, requests=%d", milestone, requests)
 	}
 }
@@ -405,12 +407,13 @@ func TestClientListProjectsPaginatesAndExcludesArchivedProjects(t *testing.T) {
 	}
 }
 
-func TestClientResolveProjectRequiresOneTeamScopedExactMatch(t *testing.T) {
+func TestClientFindProjectRequiresOneTeamScopedExactMatch(t *testing.T) {
 	tests := []struct {
 		name      string
 		selector  string
 		response  string
-		wantType  any
+		wantFound bool
+		wantErr   bool
 		wantID    string
 		wantName  string
 		wantCalls int
@@ -423,26 +426,9 @@ func TestClientResolveProjectRequiresOneTeamScopedExactMatch(t *testing.T) {
     "nodes": [{"id":"project-uuid","name":"Agent work","slugId":"agent-work","archivedAt":null}],
     "pageInfo": {"hasNextPage":false,"endCursor":""}
   }}}
-}`,
-			wantName: "Agent work",
-		},
-		{
-			name:     "resolves exact UUID",
-			selector: "11111111-1111-1111-1111-111111111111",
-			response: `{
-  "data": {
-    "team": {
-      "projects": {
-        "nodes": [
-          {"id":"11111111-1111-1111-1111-111111111111","name":"Agent work","slugId":"agent-work","archivedAt":null}
-        ],
-        "pageInfo": {"hasNextPage":false,"endCursor":""}
-      }
-    }
-  }
-}`,
-			wantID:   "11111111-1111-1111-1111-111111111111",
-			wantName: "Agent work",
+			}`,
+			wantFound: true,
+			wantName:  "Agent work",
 		},
 		{
 			name:     "resolves exact case insensitive name",
@@ -453,7 +439,8 @@ func TestClientResolveProjectRequiresOneTeamScopedExactMatch(t *testing.T) {
     "pageInfo": {"hasNextPage":false,"endCursor":""}
   }}}
 }`,
-			wantName: "Agent work",
+			wantFound: true,
+			wantName:  "Agent work",
 		},
 		{
 			name:     "rejects ambiguous exact names",
@@ -467,13 +454,12 @@ func TestClientResolveProjectRequiresOneTeamScopedExactMatch(t *testing.T) {
     "pageInfo": {"hasNextPage":false,"endCursor":""}
   }}}
 }`,
-			wantType: &ProjectAmbiguousError{},
+			wantErr: true,
 		},
 		{
-			name:     "rejects missing project",
+			name:     "reports missing project",
 			selector: "missing",
 			response: `{"data":{"team":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-			wantType: &ProjectNotFoundError{},
 		},
 	}
 
@@ -486,12 +472,21 @@ func TestClientResolveProjectRequiresOneTeamScopedExactMatch(t *testing.T) {
 			}))
 			defer server.Close()
 
-			project, err := newClient("test-token", server.URL).ResolveProject(
+			project, found, err := newClient("test-token", server.URL).FindProject(
 				context.Background(), "team-uuid", tt.selector,
 			)
-			if tt.wantType == nil {
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected resolution error")
+				}
+				return
+			}
+			if tt.wantFound {
 				if err != nil {
 					t.Fatalf("resolve project: %v", err)
+				}
+				if !found {
+					t.Fatal("expected project")
 				}
 				wantID := tt.wantID
 				if wantID == "" {
@@ -502,29 +497,17 @@ func TestClientResolveProjectRequiresOneTeamScopedExactMatch(t *testing.T) {
 				}
 				return
 			}
-			if err == nil {
-				t.Fatal("expected resolution error")
+			if err != nil {
+				t.Fatalf("resolve project: %v", err)
 			}
-			switch tt.wantType.(type) {
-			case *ProjectNotFoundError:
-				var target *ProjectNotFoundError
-				if !errors.As(err, &target) {
-					t.Errorf("expected ProjectNotFoundError, got %T", err)
-				}
-			case *ProjectAmbiguousError:
-				var target *ProjectAmbiguousError
-				if !errors.As(err, &target) {
-					t.Errorf("expected ProjectAmbiguousError, got %T", err)
-				}
-				if len(target.Candidates) != 2 {
-					t.Errorf("expected useful candidates, got %+v", target.Candidates)
-				}
+			if found {
+				t.Fatalf("expected no project, got %+v", project)
 			}
 		})
 	}
 }
 
-func TestClientGetIssueReturnsTypedAPIError(t *testing.T) {
+func TestClientFindIssueReturnsTypedAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, err := w.Write([]byte(`{"errors":[{"message":"not found"}]}`))
 		if err != nil {
@@ -533,7 +516,7 @@ func TestClientGetIssueReturnsTypedAPIError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := newClient("test-token", server.URL).GetIssue(context.Background(), "DEV-404")
+	_, _, err := newClient("test-token", server.URL).FindIssue(context.Background(), "DEV-404")
 	if err == nil {
 		t.Fatal("expected API error")
 	}
@@ -542,24 +525,34 @@ func TestClientGetIssueReturnsTypedAPIError(t *testing.T) {
 	}
 }
 
-func TestClientRejectsMissingIssueAndUnsuccessfulMutations(t *testing.T) {
+func TestClientFindIssueReportsNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, err := w.Write([]byte(`{"data":{"issues":{"nodes":[]}}}`))
+		if err != nil {
+			t.Errorf("write GraphQL response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	issue, found, err := newClient("test-token", server.URL).FindIssue(context.Background(), "DEV-404")
+	if err != nil {
+		t.Fatalf("find issue: %v", err)
+	}
+	if found {
+		t.Fatalf("expected no issue, got %+v", issue)
+	}
+}
+
+func TestClientRejectsUnsuccessfulMutations(t *testing.T) {
 	tests := []struct {
 		name     string
 		response string
-		action   func(*Client) error
+		action   func(Client) error
 	}{
-		{
-			name:     "missing issue",
-			response: `{"data":{"issue":null}}`,
-			action: func(client *Client) error {
-				_, err := client.GetIssue(context.Background(), "DEV-404")
-				return err
-			},
-		},
 		{
 			name:     "unsuccessful create",
 			response: `{"data":{"issueCreate":{"success":false,"issue":null}}}`,
-			action: func(client *Client) error {
+			action: func(client Client) error {
 				_, err := client.CreateIssue(context.Background(), IssueCreateInput{Title: "Example", TeamID: "team-uuid"})
 				return err
 			},
@@ -567,7 +560,7 @@ func TestClientRejectsMissingIssueAndUnsuccessfulMutations(t *testing.T) {
 		{
 			name:     "unsuccessful update",
 			response: `{"data":{"issueUpdate":{"success":false,"issue":null}}}`,
-			action: func(client *Client) error {
+			action: func(client Client) error {
 				_, err := client.UpdateIssue(context.Background(), "DEV-123", UpdateIssueRequest{})
 				return err
 			},
@@ -640,7 +633,7 @@ func TestClientListTeamsPaginatesAndExcludesRetiredTeams(t *testing.T) {
 	}
 }
 
-func TestClientResolveTeamUsesKeyBeforeExactName(t *testing.T) {
+func TestClientFindTeamUsesKeyBeforeExactName(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
@@ -672,9 +665,12 @@ func TestClientResolveTeamUsesKeyBeforeExactName(t *testing.T) {
 	}))
 	defer server.Close()
 
-	team, err := newClient("test-token", server.URL).ResolveTeam(context.Background(), "platform")
+	team, found, err := newClient("test-token", server.URL).FindTeam(context.Background(), "platform")
 	if err != nil {
 		t.Fatalf("resolve team: %v", err)
+	}
+	if !found {
+		t.Fatal("expected team")
 	}
 	if team.ID != "team-uuid" || team.Key != "PLATFORM" || team.Name != "Platform" {
 		t.Errorf("unexpected team: %+v", team)
@@ -684,65 +680,20 @@ func TestClientResolveTeamUsesKeyBeforeExactName(t *testing.T) {
 	}
 }
 
-func TestClientResolveTeamFallsBackFromMissingUUIDToExactName(t *testing.T) {
-	const selector = "11111111-1111-1111-1111-111111111111"
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-		var request struct {
-			Query string `json:"query"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Errorf("decode request: %v", err)
-			return
-		}
-		requests++
-		response := `{"data":{"team":null}}`
-		switch requests {
-		case 2:
-			if !strings.Contains(request.Query, "filter: $filter") {
-				t.Errorf("expected key filter query, got %s", request.Query)
-			}
-			response = `{"data":{"teams":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`
-		case 3:
-			if !strings.Contains(request.Query, "filter: $filter") {
-				t.Errorf("expected name filter query, got %s", request.Query)
-			}
-			response = `{"data":{"teams":{"nodes":[{"id":"team-uuid","key":"UUID-NAME","name":"` + selector + `","retiredAt":null}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`
-		}
-		if _, err := w.Write([]byte(response)); err != nil {
-			t.Errorf("write response: %v", err)
-		}
-	}))
-	defer server.Close()
-
-	team, err := newClient("test-token", server.URL).ResolveTeam(context.Background(), selector)
-	if err != nil {
-		t.Fatalf("resolve team: %v", err)
-	}
-	if team.ID != "team-uuid" || team.Name != selector {
-		t.Errorf("unexpected team: %+v", team)
-	}
-	if requests != 3 {
-		t.Errorf("expected UUID, key, and name queries, got %d", requests)
-	}
-}
-
-func TestClientResolveTeamReturnsTypedErrors(t *testing.T) {
+func TestClientFindTeamReportsNotFoundAndAmbiguity(t *testing.T) {
 	tests := []struct {
 		name     string
 		response string
-		wantType any
+		wantErr  bool
 	}{
 		{
 			name:     "not found",
 			response: `{"data":{"teams":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`,
-			wantType: &TeamNotFoundError{},
 		},
 		{
 			name:     "ambiguous exact name",
 			response: `{"data":{"teams":{"nodes":[{"id":"team-one","key":"ONE","name":"Platform","retiredAt":null},{"id":"team-two","key":"TWO","name":"Platform","retiredAt":null}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`,
-			wantType: &TeamAmbiguousError{},
+			wantErr:  true,
 		},
 	}
 
@@ -761,24 +712,18 @@ func TestClientResolveTeamReturnsTypedErrors(t *testing.T) {
 			}))
 			defer server.Close()
 
-			_, err := newClient("test-token", server.URL).ResolveTeam(context.Background(), "Platform")
-			if err == nil {
-				t.Fatal("expected resolution error")
+			team, found, err := newClient("test-token", server.URL).FindTeam(context.Background(), "Platform")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected resolution error")
+				}
+				return
 			}
-			switch tt.wantType.(type) {
-			case *TeamNotFoundError:
-				var target *TeamNotFoundError
-				if !errors.As(err, &target) {
-					t.Errorf("expected TeamNotFoundError, got %T", err)
-				}
-			case *TeamAmbiguousError:
-				var target *TeamAmbiguousError
-				if !errors.As(err, &target) {
-					t.Errorf("expected TeamAmbiguousError, got %T", err)
-				}
-				if len(target.Candidates) != 2 {
-					t.Errorf("expected useful candidates, got %+v", target.Candidates)
-				}
+			if err != nil {
+				t.Fatalf("resolve team: %v", err)
+			}
+			if found {
+				t.Fatalf("expected no team, got %+v", team)
 			}
 		})
 	}
@@ -842,11 +787,10 @@ func TestClientListLabelsPaginatesApplicableTeamAndWorkspaceLabels(t *testing.T)
 	}
 }
 
-func TestClientResolveLabelRejectsAmbiguityAndGroups(t *testing.T) {
+func TestClientFindLabelRejectsAmbiguityAndGroups(t *testing.T) {
 	tests := []struct {
 		name     string
 		response string
-		wantType any
 	}{
 		{
 			name: "team and workspace name conflict",
@@ -856,7 +800,6 @@ func TestClientResolveLabelRejectsAmbiguityAndGroups(t *testing.T) {
 					{"id":"workspace-label","name":"Bug","isGroup":false,"team":null}
 				],"pageInfo":{"hasNextPage":false,"endCursor":""}}}
 			}`,
-			wantType: &LabelAmbiguousError{},
 		},
 		{
 			name: "label group",
@@ -865,7 +808,6 @@ func TestClientResolveLabelRejectsAmbiguityAndGroups(t *testing.T) {
 					{"id":"group-label","name":"Type","isGroup":true,"team":null}
 				],"pageInfo":{"hasNextPage":false,"endCursor":""}}}
 			}`,
-			wantType: &LabelGroupError{},
 		},
 	}
 
@@ -889,25 +831,13 @@ func TestClientResolveLabelRejectsAmbiguityAndGroups(t *testing.T) {
 			}))
 			defer server.Close()
 
-			_, err := newClient("test-token", server.URL).ResolveLabel(
+			_, _, err := newClient("test-token", server.URL).FindLabel(
 				context.Background(),
 				"team-one",
 				"Bug",
 			)
 			if err == nil {
 				t.Fatal("expected resolution error")
-			}
-			switch tt.wantType.(type) {
-			case *LabelAmbiguousError:
-				var target *LabelAmbiguousError
-				if !errors.As(err, &target) || len(target.Candidates) != 2 {
-					t.Errorf("expected useful LabelAmbiguousError, got %v", err)
-				}
-			case *LabelGroupError:
-				var target *LabelGroupError
-				if !errors.As(err, &target) || target.Label.ID != "group-label" {
-					t.Errorf("expected LabelGroupError, got %v", err)
-				}
 			}
 		})
 	}
@@ -959,12 +889,12 @@ func TestClientListUsersPaginatesAndExcludesInactiveUsers(t *testing.T) {
 	}
 }
 
-func TestClientResolveAssignee(t *testing.T) {
+func TestClientFindAssignee(t *testing.T) {
 	tests := []struct {
 		name     string
 		selector string
 		response string
-		wantType any
+		wantErr  bool
 	}{
 		{
 			name:     "exact email",
@@ -975,7 +905,7 @@ func TestClientResolveAssignee(t *testing.T) {
 			name:     "ambiguous exact name",
 			selector: "Alex",
 			response: `{"data":{"team":{"members":{"nodes":[{"id":"user-one","name":"Alex","displayName":"Alex","email":"one@example.com","active":true},{"id":"user-two","name":"Alex","displayName":"Alex","email":"two@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
-			wantType: &UserAmbiguousError{},
+			wantErr:  true,
 		},
 	}
 
@@ -988,10 +918,17 @@ func TestClientResolveAssignee(t *testing.T) {
 			}))
 			defer server.Close()
 
-			user, err := newClient("test-token", server.URL).ResolveAssignee(context.Background(), "team-uuid", tt.selector)
-			if tt.wantType == nil {
+			user, found, err := newClient("test-token", server.URL).FindAssignee(
+				context.Background(),
+				"team-uuid",
+				tt.selector,
+			)
+			if !tt.wantErr {
 				if err != nil {
 					t.Fatalf("resolve assignee: %v", err)
+				}
+				if !found {
+					t.Fatal("expected assignee")
 				}
 				if user.ID != "user-ada" || user.Email != "ada@example.com" {
 					t.Errorf("unexpected resolved user: %+v", user)
@@ -1001,18 +938,11 @@ func TestClientResolveAssignee(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected resolution error")
 			}
-			var target *UserAmbiguousError
-			if !errors.As(err, &target) {
-				t.Fatalf("expected UserAmbiguousError, got %T", err)
-			}
-			if len(target.Candidates) != 2 {
-				t.Errorf("expected useful candidates, got %+v", target.Candidates)
-			}
 		})
 	}
 }
 
-func TestClientResolveAssigneeMeRequiresAnActiveTeamMember(t *testing.T) {
+func TestClientFindAssigneeMeRequiresAnActiveTeamMember(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests++
@@ -1026,9 +956,12 @@ func TestClientResolveAssigneeMeRequiresAnActiveTeamMember(t *testing.T) {
 	}))
 	defer server.Close()
 
-	user, err := newClient("test-token", server.URL).ResolveAssignee(context.Background(), "team-uuid", "me")
+	user, found, err := newClient("test-token", server.URL).FindAssignee(context.Background(), "team-uuid", "me")
 	if err != nil {
 		t.Fatalf("resolve me: %v", err)
+	}
+	if !found {
+		t.Fatal("expected viewer")
 	}
 	if user.ID != "viewer-uuid" || requests != 2 {
 		t.Errorf("unexpected resolved viewer: %+v, calls=%d", user, requests)
@@ -1055,11 +988,11 @@ func TestIssueMutationInputsIncludeAssigneeAndPriority(t *testing.T) {
 	}))
 	defer server.Close()
 
-	priority := testPriorityNone
-	assigneeID := "user-uuid"
 	_, err := newClient("test-token", server.URL).UpdateIssue(context.Background(), "DEV-123", UpdateIssueRequest{
-		AssigneeID: &assigneeID,
-		Priority:   &priority,
+		AssigneeID:  "user-uuid",
+		SetAssignee: true,
+		Priority:    testPriorityNone,
+		SetPriority: true,
 	})
 	if err != nil {
 		t.Fatalf("update issue: %v", err)
@@ -1071,7 +1004,7 @@ func TestIssueMutationInputsIncludeAssigneeAndPriority(t *testing.T) {
 }
 
 func TestIssueUpdateInputClearsAssignee(t *testing.T) {
-	data, err := json.Marshal(UpdateIssueRequest{ClearAssignee: true})
+	data, err := json.Marshal(newIssueUpdateInput(UpdateIssueRequest{ClearAssignee: true}))
 	if err != nil {
 		t.Fatalf("marshal update request: %v", err)
 	}

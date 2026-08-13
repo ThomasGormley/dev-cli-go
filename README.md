@@ -5,7 +5,7 @@ Development toolbox with common utilities and scripts
 ## Linear issues
 
 `dev linear` is designed for non-interactive use: output is JSON, selectors are exact, and failures use
-`{"error":{"code":"...","message":"..."}}`. Select a team with `--team` (UUID, key, or exact name),
+`{"error":{"code":"...","message":"..."}}`. Select a team with `--team` (key or exact name),
 or set `LINEAR_TEAM_ID`. Use the discovery commands to find exact selectors; each accepts `--limit` and
 `--cursor` for cursor pagination:
 
