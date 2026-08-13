@@ -680,6 +680,53 @@ func TestClientFindTeamUsesKeyBeforeExactName(t *testing.T) {
 	}
 }
 
+func TestClientFindTeamUsesIDBeforeExactName(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Variables struct {
+				Filter map[string]any `json:"filter"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests++
+		switch requests {
+		case 1:
+			if _, ok := request.Variables.Filter["key"]; !ok {
+				t.Errorf("expected first query to use key filter, got %+v", request.Variables.Filter)
+			}
+			_, _ = w.Write([]byte(`{"data":{"teams":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`))
+		case 2:
+			if _, ok := request.Variables.Filter["id"]; !ok {
+				t.Errorf("expected second query to use id filter, got %+v", request.Variables.Filter)
+			}
+			_, _ = w.Write([]byte(`{"data":{"teams":{"nodes":[{"id":"team-uuid","key":"DEV","name":"Development","retiredAt":null}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`))
+		default:
+			t.Errorf("unexpected extra team lookup %d with filter %+v", requests, request.Variables.Filter)
+			_, _ = w.Write([]byte(`{"data":{"teams":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`))
+		}
+	}))
+	defer server.Close()
+
+	team, found, err := newClient("test-token", server.URL).FindTeam(context.Background(), "team-uuid")
+	if err != nil {
+		t.Fatalf("find team: %v", err)
+	}
+	if !found {
+		t.Fatal("expected team")
+	}
+	if team.ID != "team-uuid" || team.Key != "DEV" || team.Name != "Development" {
+		t.Errorf("unexpected team: %+v", team)
+	}
+	if requests != 2 {
+		t.Errorf("expected key and id queries, got %d", requests)
+	}
+}
+
 func TestClientFindTeamReportsNotFoundAndAmbiguity(t *testing.T) {
 	tests := []struct {
 		name     string

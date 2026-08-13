@@ -25,6 +25,7 @@ type TeamPage struct {
 // TeamFilter must keep Linear's GraphQL input type name because shurcooL/graphql
 // derives variable declarations from Go type names.
 type TeamFilter struct {
+	ID   *idComparator     `json:"id,omitempty"`
 	Key  *stringComparator `json:"key,omitempty"`
 	Name *stringComparator `json:"name,omitempty"`
 }
@@ -80,6 +81,14 @@ func (c Client) FindTeam(ctx context.Context, selector string) (Team, bool, erro
 	}
 	if len(keyMatches) > 0 {
 		return selectTeam(selector, keyMatches)
+	}
+
+	idMatches, err := c.queryTeamsByFilter(ctx, TeamFilter{ID: exactIDComparator(selector)})
+	if err != nil {
+		return Team{}, false, &APIError{Operation: "resolve team", Err: err}
+	}
+	if len(idMatches) > 0 {
+		return selectTeam(selector, idMatches)
 	}
 
 	nameMatches, err := c.queryTeamsByFilter(ctx, TeamFilter{Name: exactComparator(selector)})
