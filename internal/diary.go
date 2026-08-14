@@ -35,6 +35,7 @@ func handleDiaryOpen(stdout, stderr io.Writer) cli.ActionFunc {
 		editorPath, editorArgs, ok := editor.Lookup()
 		if !ok {
 			editorPath = "zed"
+			editorArgs = []string{"--classic"}
 		}
 
 		diaryRepo, ok := diary.RepoPath()
