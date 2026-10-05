@@ -12,19 +12,21 @@ import (
 
 // GraphQL types for Linear API
 type Issue struct {
-	ID               graphql.ID       `graphql:"id"`
-	Identifier       graphql.String   `graphql:"identifier"`
-	URL              graphql.String   `graphql:"url"`
-	Title            graphql.String   `graphql:"title"`
-	Description      graphql.String   `graphql:"description"`
-	Assignee         User             `graphql:"assignee"`
-	Priority         graphql.Int      `graphql:"priority"`
-	State            WorkflowState    `graphql:"state"`
-	BranchName       graphql.String   `graphql:"branchName"`
-	Team             Team             `graphql:"team"`
-	Project          Project          `graphql:"project"`
-	ProjectMilestone ProjectMilestone `graphql:"projectMilestone"`
-	Labels           LabelConnection  `graphql:"labels(first: 50)"`
+	ID               graphql.ID              `graphql:"id"`
+	Identifier       graphql.String          `graphql:"identifier"`
+	URL              graphql.String          `graphql:"url"`
+	Title            graphql.String          `graphql:"title"`
+	Description      graphql.String          `graphql:"description"`
+	Assignee         User                    `graphql:"assignee"`
+	Priority         graphql.Int             `graphql:"priority"`
+	State            WorkflowState           `graphql:"state"`
+	BranchName       graphql.String          `graphql:"branchName"`
+	Team             Team                    `graphql:"team"`
+	Project          Project                 `graphql:"project"`
+	ProjectMilestone ProjectMilestone        `graphql:"projectMilestone"`
+	Labels           LabelConnection         `graphql:"labels(first: 50)"`
+	Parent           IssueRef                `graphql:"parent"`
+	InverseRelations IssueRelationConnection `graphql:"inverseRelations(first: 50)"`
 }
 
 type findIssueQuery struct {
@@ -90,6 +92,7 @@ type IssueCreateInput struct {
 	LabelIDs           []string `json:"labelIds,omitempty"`
 	AssigneeID         string   `json:"assigneeId,omitempty"`
 	Priority           int      `json:"priority,omitempty"`
+	ParentID           string   `json:"parentId,omitempty"`
 }
 
 type UpdateIssueRequest struct {
@@ -112,6 +115,9 @@ type UpdateIssueRequest struct {
 	AddedLabelIDs         []string
 	RemovedLabelIDs       []string
 	ClearLabels           bool
+	ParentID              string
+	SetParent             bool
+	ClearParent           bool
 }
 
 func (i UpdateIssueRequest) MarshalJSON() ([]byte, error) {
@@ -153,6 +159,7 @@ type IssueUpdateInput struct {
 	AddedLabelIDs      []graphql.ID    `json:"addedLabelIds,omitempty"`
 	RemovedLabelIDs    []graphql.ID    `json:"removedLabelIds,omitempty"`
 	LabelIDs           *[]graphql.ID   `json:"labelIds,omitempty"`
+	ParentID           *nullableID     `json:"parentId,omitempty"`
 }
 
 type issueCreateMutation struct {
@@ -292,6 +299,12 @@ func newIssueUpdateInput(input UpdateIssueRequest) IssueUpdateInput {
 	}
 	if input.ClearProjectMilestone {
 		output.ProjectMilestoneID = &nullableID{}
+	}
+	if input.SetParent {
+		output.ParentID = newNullableID(input.ParentID)
+	}
+	if input.ClearParent {
+		output.ParentID = &nullableID{}
 	}
 	return output
 }

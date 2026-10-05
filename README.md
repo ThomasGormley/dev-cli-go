@@ -29,3 +29,17 @@ dev linear create --title "Improve agent workflow" --team DEV \
 `--description-file -` reads the description from stdin. `update` leaves omitted properties unchanged; use
 `--clear-description`, `--clear-assignee`, `--clear-project`, `--clear-milestone`, or `--clear-labels` for
 explicit clears. Labels are patched with repeatable `--add-label` and `--remove-label`, not replaced.
+
+Set a parent with `--parent DEV-1` on `create` or `update` (`--clear-parent` on `update`). Blocking links are
+update-only: repeatable `--add-blocked-by` and `--remove-blocked-by` take issue identifiers, skip links that
+already match, and are safe to re-run. Issue output includes `parent` and `blockedBy`. To create a linked batch,
+create every issue first, then add the links in any order:
+
+```sh
+epic=$(dev linear create --title "Epic" --team DEV | jq -r .identifier)
+a=$(dev linear create --title "Step A" --team DEV --parent "$epic" | jq -r .identifier)
+b=$(dev linear create --title "Step B" --team DEV --parent "$epic" | jq -r .identifier)
+dev linear update --add-blocked-by "$a" "$b"
+```
+
+Flags must come before the issue identifier.

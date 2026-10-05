@@ -28,6 +28,8 @@ type Clienter interface {
 	FindProjectMilestone(ctx context.Context, projectID string, selector string) (ProjectMilestone, bool, error)
 	FindTeam(ctx context.Context, selector string) (Team, bool, error)
 	UpdateIssue(ctx context.Context, id string, input UpdateIssueRequest) (Issue, error)
+	CreateIssueRelation(ctx context.Context, input IssueRelationCreateInput) error
+	DeleteIssueRelation(ctx context.Context, id string) error
 }
 
 type APIError struct {

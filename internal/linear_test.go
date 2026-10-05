@@ -59,6 +59,10 @@ type fakeLinearClient struct {
 	resolveUserErr      error
 	resolveUserTeamID   string
 	resolveUserTerm     string
+	issues              map[string]linear.Issue
+	relationCreates     []linear.IssueRelationCreateInput
+	relationDeletes     []string
+	relationErr         error
 }
 
 func (f *fakeLinearClient) CreateIssue(_ context.Context, input linear.IssueCreateInput) (linear.Issue, error) {
@@ -72,7 +76,21 @@ func (f *fakeLinearClient) FindIssue(_ context.Context, id string) (linear.Issue
 	if f.err != nil {
 		return linear.Issue{}, false, f.err
 	}
+	if f.issues != nil {
+		issue, ok := f.issues[id]
+		return issue, ok, nil
+	}
 	return f.issue, f.issue.ID != nil, nil
+}
+
+func (f *fakeLinearClient) CreateIssueRelation(_ context.Context, input linear.IssueRelationCreateInput) error {
+	f.relationCreates = append(f.relationCreates, input)
+	return f.relationErr
+}
+
+func (f *fakeLinearClient) DeleteIssueRelation(_ context.Context, id string) error {
+	f.relationDeletes = append(f.relationDeletes, id)
+	return f.relationErr
 }
 
 func (f *fakeLinearClient) UpdateIssue(

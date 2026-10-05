@@ -565,6 +565,21 @@ func TestClientRejectsUnsuccessfulMutations(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name:     "unsuccessful relation create",
+			response: `{"data":{"issueRelationCreate":{"success":false}}}`,
+			action: func(client Client) error {
+				input := NewBlockedByRelation("blocked-uuid", "blocker-uuid")
+				return client.CreateIssueRelation(context.Background(), input)
+			},
+		},
+		{
+			name:     "unsuccessful relation delete",
+			response: `{"data":{"issueRelationDelete":{"success":false}}}`,
+			action: func(client Client) error {
+				return client.DeleteIssueRelation(context.Background(), "relation-uuid")
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1120,4 +1135,156 @@ func TestClientUpdateIssuePatchesAndClearsLabels(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientCreateIssueIncludesParent(t *testing.T) {
+	server, requests := newRecordingServer(t, `{"data":{"issueCreate":{"success":true,"issue":{"id":"issue-uuid"}}}}`)
+
+	_, err := newClient("test-token", server.URL).CreateIssue(context.Background(), IssueCreateInput{
+		Title: "Example", TeamID: "team-uuid", ParentID: "parent-uuid",
+	})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	input := (*requests)[0].Variables["input"].(map[string]any)
+	if input["parentId"] != "parent-uuid" {
+		t.Errorf("expected parent ID in mutation input, got %#v", input)
+	}
+}
+
+func TestClientUpdateIssueSetsAndClearsParent(t *testing.T) {
+	tests := []struct {
+		name  string
+		input UpdateIssueRequest
+		want  map[string]any
+	}{
+		{
+			name:  "sets parent",
+			input: UpdateIssueRequest{ParentID: "parent-uuid", SetParent: true},
+			want:  map[string]any{"parentId": "parent-uuid"},
+		},
+		{
+			name:  "clears parent",
+			input: UpdateIssueRequest{ClearParent: true},
+			want:  map[string]any{"parentId": nil},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, requests := newRecordingServer(t, issueUpdateResponse)
+
+			_, err := newClient("test-token", server.URL).UpdateIssue(context.Background(), "DEV-123", tt.input)
+			if err != nil {
+				t.Fatalf("update issue: %v", err)
+			}
+			if got := (*requests)[0].Variables["input"]; !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("expected mutation input %#v, got %#v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestClientCreateIssueRelationSendsBlockerAsSource(t *testing.T) {
+	server, requests := newRecordingServer(t, `{"data":{"issueRelationCreate":{"success":true}}}`)
+
+	err := newClient("test-token", server.URL).CreateIssueRelation(
+		context.Background(),
+		NewBlockedByRelation("blocked-uuid", "blocker-uuid"),
+	)
+	if err != nil {
+		t.Fatalf("create issue relation: %v", err)
+	}
+	request := (*requests)[0]
+	if !strings.Contains(request.Query, "issueRelationCreate(input: $input)") ||
+		!strings.Contains(request.Query, "$input:IssueRelationCreateInput!") {
+		t.Errorf("unexpected relation mutation: %s", request.Query)
+	}
+	want := map[string]any{"issueId": "blocker-uuid", "relatedIssueId": "blocked-uuid", "type": "blocks"}
+	if got := request.Variables["input"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("expected relation input %#v, got %#v", want, got)
+	}
+}
+
+func TestClientDeleteIssueRelationSendsRelationID(t *testing.T) {
+	server, requests := newRecordingServer(t, `{"data":{"issueRelationDelete":{"success":true}}}`)
+
+	err := newClient("test-token", server.URL).DeleteIssueRelation(context.Background(), "relation-uuid")
+	if err != nil {
+		t.Fatalf("delete issue relation: %v", err)
+	}
+	request := (*requests)[0]
+	if !strings.Contains(request.Query, "issueRelationDelete(id: $id)") || request.Variables["id"] != "relation-uuid" {
+		t.Errorf("unexpected relation delete request: %+v", request)
+	}
+}
+
+func TestClientFindIssueReturnsParentAndBlockers(t *testing.T) {
+	server, requests := newRecordingServer(t, `{"data":{"issues":{"nodes":[{
+		"id":"issue-uuid","identifier":"DEV-123",
+		"parent":{"id":"parent-uuid","identifier":"DEV-1"},
+		"inverseRelations":{"nodes":[
+			{"id":"relation-blocks","type":"blocks","issue":{"id":"blocker-uuid","identifier":"DEV-2"}},
+			{"id":"relation-related","type":"related","issue":{"id":"related-uuid","identifier":"DEV-3"}}
+		],"pageInfo":{"hasNextPage":false}}
+	}]}}}`)
+
+	issue, found, err := newClient("test-token", server.URL).FindIssue(context.Background(), "DEV-123")
+	if err != nil || !found {
+		t.Fatalf("find issue: found=%v err=%v", found, err)
+	}
+	if issue.Parent.ID != "parent-uuid" || issue.Parent.Identifier != "DEV-1" {
+		t.Errorf("unexpected parent: %+v", issue.Parent)
+	}
+	blockers, err := issue.BlockedBy()
+	if err != nil {
+		t.Fatalf("read blockers: %v", err)
+	}
+	want := []IssueRelation{
+		{ID: "relation-blocks", Type: "blocks", Issue: IssueRef{ID: "blocker-uuid", Identifier: "DEV-2"}},
+	}
+	if !reflect.DeepEqual(blockers, want) {
+		t.Errorf("expected blockers %+v, got %+v", want, blockers)
+	}
+	if query := (*requests)[0].Query; !strings.Contains(query, "inverseRelations(first: 50)") {
+		t.Errorf("expected issue query to request inverse relations, got %s", query)
+	}
+}
+
+func TestIssueBlockedByRejectsTruncatedRelations(t *testing.T) {
+	server, _ := newRecordingServer(t, `{"data":{"issues":{"nodes":[{
+		"id":"issue-uuid","identifier":"DEV-123",
+		"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":true}}
+	}]}}}`)
+
+	issue, found, err := newClient("test-token", server.URL).FindIssue(context.Background(), "DEV-123")
+	if err != nil || !found {
+		t.Fatalf("find issue: found=%v err=%v", found, err)
+	}
+	if _, err := issue.BlockedBy(); err == nil {
+		t.Fatal("expected an error when relations are truncated")
+	}
+}
+
+type recordedGraphQLRequest struct {
+	Query     string         `json:"query"`
+	Variables map[string]any `json:"variables"`
+}
+
+func newRecordingServer(t *testing.T, response string) (*httptest.Server, *[]recordedGraphQLRequest) {
+	t.Helper()
+	requests := []recordedGraphQLRequest{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request recordedGraphQLRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode GraphQL request: %v", err)
+			return
+		}
+		requests = append(requests, request)
+		if _, err := w.Write([]byte(response)); err != nil {
+			t.Errorf("write GraphQL response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server, &requests
 }
