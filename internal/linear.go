@@ -785,25 +785,29 @@ func resolveLinearUpdateLabels(
 }
 
 func linearDescription(c *cli.Context, stdin io.Reader, allowClear bool) (string, error) {
-	hasDescription := c.IsSet("description")
-	hasFile := c.IsSet("description-file")
-	if hasDescription && hasFile {
-		return "", invalidLinearArguments("--description and --description-file cannot be used together")
-	}
-	if allowClear && c.Bool("clear-description") && (hasDescription || hasFile) {
+	if allowClear && c.Bool("clear-description") && (c.IsSet("description") || c.IsSet("description-file")) {
 		return "", invalidLinearArguments("--clear-description cannot be used with a description value")
 	}
+	return linearTextFlag(c, stdin, "description")
+}
+
+func linearTextFlag(c *cli.Context, stdin io.Reader, name string) (string, error) {
+	fileFlag := name + "-file"
+	hasFile := c.IsSet(fileFlag)
+	if c.IsSet(name) && hasFile {
+		return "", invalidLinearArguments(fmt.Sprintf("--%s and --%s cannot be used together", name, fileFlag))
+	}
 	if !hasFile {
-		return c.String("description"), nil
+		return c.String(name), nil
 	}
 
-	path := c.String("description-file")
+	path := c.String(fileFlag)
 	if path == "-" {
 		data, err := io.ReadAll(stdin)
 		if err != nil {
 			return "", &linearCommandError{
 				Code:    "invalid_arguments",
-				Message: fmt.Sprintf("read description from stdin: %v", err),
+				Message: fmt.Sprintf("read %s from stdin: %v", name, err),
 				Err:     err,
 			}
 		}
@@ -813,7 +817,7 @@ func linearDescription(c *cli.Context, stdin io.Reader, allowClear bool) (string
 	if err != nil {
 		return "", &linearCommandError{
 			Code:    "invalid_arguments",
-			Message: fmt.Sprintf("read description file: %v", err),
+			Message: fmt.Sprintf("read %s file: %v", name, err),
 			Err:     err,
 		}
 	}

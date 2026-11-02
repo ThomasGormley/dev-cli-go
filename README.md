@@ -45,4 +45,13 @@ b=$(dev linear create --title "Step B" --team DEV --parent "$epic" | jq -r .iden
 dev linear update --add-blocked-by "$a" "$b"
 ```
 
+Post a markdown comment with `comment --body` or `comment --body-file` (`-` reads stdin). `comment` supports
+`--dry-run`, but it is not safe to re-run: each run posts a new comment. To close an issue with a note, move it
+first, because `update` is safe to repeat if the comment fails:
+
+```sh
+dev linear update --state Done VISA-748
+dev linear comment --body-file - VISA-748 < closing.md
+```
+
 Flags must come before the issue identifier.

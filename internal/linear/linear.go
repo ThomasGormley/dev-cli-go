@@ -11,6 +11,7 @@ import (
 const apiURL = "https://api.linear.app/graphql"
 
 type Clienter interface {
+	CreateComment(ctx context.Context, input CommentCreateInput) (Comment, error)
 	CreateIssue(ctx context.Context, input IssueCreateInput) (Issue, error)
 	FindIssue(ctx context.Context, id string) (Issue, bool, error)
 	ListLabels(ctx context.Context, teamID string, request LabelListRequest) (LabelPage, error)

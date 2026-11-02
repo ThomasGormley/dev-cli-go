@@ -70,6 +70,14 @@ type fakeLinearClient struct {
 	resolveStateErr     error
 	resolveStateTeam    string
 	resolveStateTerm    string
+	comment             linear.Comment
+	commentErr          error
+	commentInputs       []linear.CommentCreateInput
+}
+
+func (f *fakeLinearClient) CreateComment(_ context.Context, input linear.CommentCreateInput) (linear.Comment, error) {
+	f.commentInputs = append(f.commentInputs, input)
+	return f.comment, f.commentErr
 }
 
 func (f *fakeLinearClient) CreateIssue(_ context.Context, input linear.IssueCreateInput) (linear.Issue, error) {

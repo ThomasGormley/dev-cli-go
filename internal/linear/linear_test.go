@@ -580,6 +580,14 @@ func TestClientRejectsUnsuccessfulMutations(t *testing.T) {
 				return client.DeleteIssueRelation(context.Background(), "relation-uuid")
 			},
 		},
+		{
+			name:     "unsuccessful comment create",
+			response: `{"data":{"commentCreate":{"success":false,"comment":null}}}`,
+			action: func(client Client) error {
+				_, err := client.CreateComment(context.Background(), CommentCreateInput{IssueID: "issue-uuid", Body: "Done"})
+				return err
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1375,6 +1383,36 @@ func TestClientFindWorkflowStateRequiresOneExactNameMatch(t *testing.T) {
 				t.Errorf("expected team-scoped exact name filter, got %+v", request.Variables)
 			}
 		})
+	}
+}
+
+func TestClientCreateCommentSendsIssueAndBody(t *testing.T) {
+	server, requests := newRecordingServer(t, `{"data":{"commentCreate":{"success":true,"comment":{
+		"id":"comment-uuid","url":"https://linear.app/comment","body":"Done\n",
+		"issue":{"id":"issue-uuid","identifier":"DEV-123"}
+	}}}}`)
+
+	comment, err := newClient("test-token", server.URL).CreateComment(
+		context.Background(), CommentCreateInput{IssueID: "issue-uuid", Body: "Done\n"},
+	)
+	if err != nil {
+		t.Fatalf("create comment: %v", err)
+	}
+	request := (*requests)[0]
+	if !strings.Contains(request.Query, "commentCreate(input: $input)") ||
+		!strings.Contains(request.Query, "$input:CommentCreateInput!") {
+		t.Errorf("unexpected comment mutation: %s", request.Query)
+	}
+	want := map[string]any{"issueId": "issue-uuid", "body": "Done\n"}
+	if got := request.Variables["input"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("expected comment input %#v, got %#v", want, got)
+	}
+	wantComment := Comment{
+		ID: "comment-uuid", URL: "https://linear.app/comment", Body: "Done\n",
+		Issue: IssueRef{ID: "issue-uuid", Identifier: "DEV-123"},
+	}
+	if !reflect.DeepEqual(comment, wantComment) {
+		t.Errorf("expected comment %+v, got %+v", wantComment, comment)
 	}
 }
 

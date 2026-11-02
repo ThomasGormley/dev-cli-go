@@ -268,6 +268,14 @@ func Run(
 						Action:       handleLinearUpdate(stdout, stderr, os.Stdin),
 					},
 					{
+						Name:         "comment",
+						Usage:        "Post a comment on an issue",
+						ArgsUsage:    "<issue-id>",
+						Flags:        linearCommentFlags(),
+						OnUsageError: linearUsageError(stderr),
+						Action:       handleLinearComment(stdout, stderr, os.Stdin),
+					},
+					{
 						Name:  "team",
 						Usage: "Discover accessible Linear teams",
 						Subcommands: []*cli.Command{
