@@ -27,6 +27,8 @@ type Clienter interface {
 	FindProject(ctx context.Context, teamID string, selector string) (Project, bool, error)
 	FindProjectMilestone(ctx context.Context, projectID string, selector string) (ProjectMilestone, bool, error)
 	FindTeam(ctx context.Context, selector string) (Team, bool, error)
+	ListWorkflowStates(ctx context.Context, teamID string, request WorkflowStateListRequest) (WorkflowStatePage, error)
+	FindWorkflowState(ctx context.Context, teamID, selector string) (WorkflowState, bool, error)
 	UpdateIssue(ctx context.Context, id string, input UpdateIssueRequest) (Issue, error)
 	CreateIssueRelation(ctx context.Context, input IssueRelationCreateInput) error
 	DeleteIssueRelation(ctx context.Context, id string) error

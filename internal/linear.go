@@ -115,6 +115,7 @@ type linearIssueOutput struct {
 	ProjectMilestone *linearProjectMilestoneOutput `json:"projectMilestone"`
 	Assignee         *linearUserOutput             `json:"assignee"`
 	Priority         string                        `json:"priority"`
+	State            *linearWorkflowStateOutput    `json:"state"`
 	Labels           []linearLabelOutput           `json:"labels"`
 	Parent           *linearIssueRefOutput         `json:"parent"`
 	BlockedBy        []linearIssueRefOutput        `json:"blockedBy"`
@@ -145,6 +146,7 @@ type linearUpdateResolvedOutput struct {
 	Assignee         *linearUserOutput             `json:"assignee"`
 	Priority         *string                       `json:"priority"`
 	Parent           *linearIssueRefOutput         `json:"parent,omitempty"`
+	State            *linearWorkflowStateOutput    `json:"state,omitempty"`
 }
 
 type linearProjectChange struct {
@@ -271,6 +273,7 @@ func linearUpdateFlags() []cli.Flag {
 		&cli.BoolFlag{Name: "clear-parent", Usage: "remove the issue from its parent"},
 		&cli.StringSliceFlag{Name: "add-blocked-by", Usage: "identifier of an issue that blocks this one (repeatable)"},
 		&cli.StringSliceFlag{Name: "remove-blocked-by", Usage: "identifier of a blocking issue to unlink (repeatable)"},
+		&cli.StringFlag{Name: "state", Usage: "workflow state exact name, e.g. Done"},
 		&cli.BoolFlag{Name: "dry-run", Usage: "validate and print the mutation input without updating the issue"},
 	)
 }
@@ -665,10 +668,14 @@ func handleLinearUpdate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		if err != nil {
 			return exitLinearError(stderr, err)
 		}
+		stateSelector, err := linearStateSelector(c)
+		if err != nil {
+			return exitLinearError(stderr, err)
+		}
 		if !hasLinearUpdate(input) && !projectChange.IsSet() && !milestoneChange.IsSet() && !c.IsSet("assignee") &&
-			!linkChange.IsSet() {
+			!linkChange.IsSet() && stateSelector == "" {
 			return exitLinearError(stderr, invalidLinearArguments(
-				"at least one issue field, project, milestone, label, parent, or blocked-by change required",
+				"at least one issue field, project, milestone, label, parent, blocked-by, or state change required",
 			))
 		}
 		if err := requireLinearAPIKey(); err != nil {
@@ -699,6 +706,10 @@ func handleLinearUpdate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 		if err != nil {
 			return exitLinearError(stderr, err)
 		}
+		input, resolvedState, err := resolveLinearUpdateState(c.Context, client, issueID, input, stateSelector)
+		if err != nil {
+			return exitLinearError(stderr, err)
+		}
 
 		if c.Bool("dry-run") {
 			return writeLinearJSON(
@@ -713,6 +724,7 @@ func handleLinearUpdate(stdout, stderr io.Writer, stdin io.Reader) cli.ActionFun
 					linearPriorityNameFromValue(input.Priority, input.SetPriority),
 					linkChange,
 					resolvedLinks,
+					resolvedState,
 				),
 			)
 		}
@@ -853,7 +865,8 @@ func hasLinearUpdate(input linear.UpdateIssueRequest) bool {
 	return input.SetTitle || input.SetDescription || input.ClearDescription ||
 		input.SetProject || input.ClearProject || input.SetProjectMilestone || input.ClearProjectMilestone ||
 		len(input.AddedLabelIDs) > 0 || len(input.RemovedLabelIDs) > 0 || input.ClearLabels ||
-		input.SetAssignee || input.ClearAssignee || input.SetPriority || input.SetParent || input.ClearParent
+		input.SetAssignee || input.ClearAssignee || input.SetPriority || input.SetParent || input.ClearParent ||
+		input.SetState
 }
 
 func linearProjectUpdate(c *cli.Context) (linearProjectChange, error) {
@@ -1009,13 +1022,15 @@ func newLinearUpdateDryRunOutput(
 	priority *string,
 	linkChange linearLinkChange,
 	links linearResolvedLinkChange,
+	state *linearWorkflowStateOutput,
 ) linearDryRunOutput {
 	output := linearDryRunOutput{
 		DryRun:    true,
 		Operation: "update",
 		Input:     linearUpdateDryRunInput{ID: issueID, Update: input},
 	}
-	if projectChange.Changed || len(labels) > 0 || assigneeChanged || priority != nil || linkChange.Parent.IsSet() {
+	if projectChange.Changed || len(labels) > 0 || assigneeChanged || priority != nil || linkChange.Parent.IsSet() ||
+		state != nil {
 		output.Resolved = linearUpdateResolvedOutput{
 			Project:          projectChange.Project,
 			ProjectMilestone: projectChange.ProjectMilestone,
@@ -1023,6 +1038,7 @@ func newLinearUpdateDryRunOutput(
 			Assignee:         assignee,
 			Priority:         priority,
 			Parent:           links.Parent,
+			State:            state,
 		}
 	}
 	if linkChange.BlockedBy.IsSet() {
@@ -1474,6 +1490,10 @@ func newLinearIssueOutput(
 	if err != nil {
 		return linearIssueOutput{}, err
 	}
+	state, err := newOptionalLinearWorkflowStateOutput(issue.State)
+	if err != nil {
+		return linearIssueOutput{}, err
+	}
 	return linearIssueOutput{
 		ID:               id,
 		Identifier:       string(issue.Identifier),
@@ -1485,6 +1505,7 @@ func newLinearIssueOutput(
 		ProjectMilestone: projectMilestone,
 		Assignee:         assignee,
 		Priority:         linearPriorityName(int(issue.Priority)),
+		State:            state,
 		Labels:           labels,
 		Parent:           parent,
 		BlockedBy:        blockedBy,

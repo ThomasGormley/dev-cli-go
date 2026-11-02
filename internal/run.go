@@ -316,6 +316,17 @@ func Run(
 						}},
 					},
 					{
+						Name:  "state",
+						Usage: "Discover Linear workflow states",
+						Subcommands: []*cli.Command{{
+							Name:         "list",
+							Usage:        "List workflow states for a team",
+							Flags:        linearStateListFlags(),
+							OnUsageError: linearUsageError(stderr),
+							Action:       handleLinearStateList(stdout, stderr),
+						}},
+					},
+					{
 						Name:  "user",
 						Usage: "Discover active Linear team members",
 						Subcommands: []*cli.Command{

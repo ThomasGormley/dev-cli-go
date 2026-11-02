@@ -1265,6 +1265,119 @@ func TestIssueBlockedByRejectsTruncatedRelations(t *testing.T) {
 	}
 }
 
+func TestClientUpdateIssueSetsState(t *testing.T) {
+	server, requests := newRecordingServer(t, issueUpdateResponse)
+
+	_, err := newClient("test-token", server.URL).UpdateIssue(context.Background(), "DEV-123", UpdateIssueRequest{
+		StateID: "state-uuid", SetState: true,
+	})
+	if err != nil {
+		t.Fatalf("update issue: %v", err)
+	}
+	want := map[string]any{"stateId": "state-uuid"}
+	if got := (*requests)[0].Variables["input"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("expected mutation input %#v, got %#v", want, got)
+	}
+}
+
+func TestClientListWorkflowStatesPaginatesTeamStates(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var request struct {
+			Query     string `json:"query"`
+			Variables struct {
+				First  int    `json:"first"`
+				After  string `json:"after"`
+				TeamID string `json:"teamID"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		requests++
+		if !strings.Contains(request.Query, "team(id: $teamID){states(first: $first, after: $after)") {
+			t.Errorf("unexpected query: %s", request.Query)
+		}
+		response := `{"data":{"team":{"states":{"nodes":[{"id":"state-todo","name":"Todo","type":"unstarted"}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-one"}}}}}`
+		wantFirst, wantAfter := 2, ""
+		if requests == 2 {
+			response = `{"data":{"team":{"states":{"nodes":[{"id":"state-done","name":"Done","type":"completed"}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-two"}}}}}`
+			wantFirst, wantAfter = 1, "cursor-one"
+		}
+		if request.Variables.TeamID != "team-uuid" || request.Variables.First != wantFirst ||
+			request.Variables.After != wantAfter {
+			t.Errorf("unexpected request %d variables: %+v", requests, request.Variables)
+		}
+		if _, err := w.Write([]byte(response)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	page, err := newClient("test-token", server.URL).ListWorkflowStates(
+		context.Background(), "team-uuid", WorkflowStateListRequest{Limit: 2},
+	)
+	if err != nil {
+		t.Fatalf("list workflow states: %v", err)
+	}
+	want := WorkflowStatePage{
+		Items: []WorkflowState{
+			{ID: "state-todo", Name: "Todo", Type: "unstarted"},
+			{ID: "state-done", Name: "Done", Type: "completed"},
+		},
+		PageInfo: PageInfo{HasNextPage: true, NextCursor: "cursor-two"},
+	}
+	if !reflect.DeepEqual(page, want) || requests != 2 {
+		t.Errorf("expected page %+v after 2 requests, got %+v after %d", want, page, requests)
+	}
+}
+
+func TestClientFindWorkflowStateRequiresOneExactNameMatch(t *testing.T) {
+	tests := []struct {
+		name      string
+		response  string
+		wantFound bool
+		wantErr   bool
+	}{
+		{
+			name:      "single match",
+			response:  `{"data":{"team":{"states":{"nodes":[{"id":"state-done","name":"Done","type":"completed"}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+			wantFound: true,
+		},
+		{
+			name:     "ambiguous name",
+			response: `{"data":{"team":{"states":{"nodes":[{"id":"state-one","name":"Done","type":"completed"},{"id":"state-two","name":"Done","type":"completed"}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+			wantErr:  true,
+		},
+		{
+			name:     "no match",
+			response: `{"data":{"team":{"states":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, requests := newRecordingServer(t, tt.response)
+
+			state, found, err := newClient("test-token", server.URL).FindWorkflowState(
+				context.Background(), "team-uuid", "done",
+			)
+			if (err != nil) != tt.wantErr || found != tt.wantFound {
+				t.Fatalf("expected found=%v err=%v, got found=%v err=%v", tt.wantFound, tt.wantErr, found, err)
+			}
+			if tt.wantFound && state.ID != "state-done" {
+				t.Errorf("unexpected state: %+v", state)
+			}
+			request := (*requests)[0]
+			wantFilter := map[string]any{"name": map[string]any{"eqIgnoreCase": "done"}}
+			if !reflect.DeepEqual(request.Variables["filter"], wantFilter) || request.Variables["teamID"] != "team-uuid" {
+				t.Errorf("expected team-scoped exact name filter, got %+v", request.Variables)
+			}
+		})
+	}
+}
+
 type recordedGraphQLRequest struct {
 	Query     string         `json:"query"`
 	Variables map[string]any `json:"variables"`

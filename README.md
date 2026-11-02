@@ -15,6 +15,7 @@ dev linear user list --team DEV --cursor <nextCursor>
 dev linear project list --team DEV
 dev linear milestone list --team DEV --project agent-work
 dev linear label list --team DEV
+dev linear state list --team DEV
 ```
 
 Create an issue after resolving every property, or add `--dry-run` to inspect the normalized mutation input
@@ -29,6 +30,8 @@ dev linear create --title "Improve agent workflow" --team DEV \
 `--description-file -` reads the description from stdin. `update` leaves omitted properties unchanged; use
 `--clear-description`, `--clear-assignee`, `--clear-project`, `--clear-milestone`, or `--clear-labels` for
 explicit clears. Labels are patched with repeatable `--add-label` and `--remove-label`, not replaced.
+Move an issue with `update --state Done`; the name must exactly match one of the issue team's workflow states
+(case-insensitive). Issue output includes `state`.
 
 Set a parent with `--parent DEV-1` on `create` or `update` (`--clear-parent` on `update`). Blocking links are
 update-only: repeatable `--add-blocked-by` and `--remove-blocked-by` take issue identifiers, skip links that

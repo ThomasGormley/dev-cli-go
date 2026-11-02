@@ -63,6 +63,13 @@ type fakeLinearClient struct {
 	relationCreates     []linear.IssueRelationCreateInput
 	relationDeletes     []string
 	relationErr         error
+	statePage           linear.WorkflowStatePage
+	stateListTeam       string
+	stateRequest        linear.WorkflowStateListRequest
+	resolveState        linear.WorkflowState
+	resolveStateErr     error
+	resolveStateTeam    string
+	resolveStateTerm    string
 }
 
 func (f *fakeLinearClient) CreateIssue(_ context.Context, input linear.IssueCreateInput) (linear.Issue, error) {
@@ -211,6 +218,32 @@ func (f *fakeLinearClient) FindProjectMilestone(
 		return linear.ProjectMilestone{}, false, f.resolveMilestoneErr
 	}
 	return f.resolveMilestone, f.resolveMilestone.ID != nil, nil
+}
+
+func (f *fakeLinearClient) ListWorkflowStates(
+	_ context.Context,
+	teamID string,
+	request linear.WorkflowStateListRequest,
+) (linear.WorkflowStatePage, error) {
+	f.stateListTeam = teamID
+	f.stateRequest = request
+	if f.listErr != nil {
+		return linear.WorkflowStatePage{}, f.listErr
+	}
+	return f.statePage, nil
+}
+
+func (f *fakeLinearClient) FindWorkflowState(
+	_ context.Context,
+	teamID string,
+	selector string,
+) (linear.WorkflowState, bool, error) {
+	f.resolveStateTeam = teamID
+	f.resolveStateTerm = selector
+	if f.resolveStateErr != nil {
+		return linear.WorkflowState{}, false, f.resolveStateErr
+	}
+	return f.resolveState, f.resolveState.ID != nil, nil
 }
 
 func newLinearIssue() linear.Issue {

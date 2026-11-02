@@ -118,6 +118,8 @@ type UpdateIssueRequest struct {
 	ParentID              string
 	SetParent             bool
 	ClearParent           bool
+	StateID               string
+	SetState              bool
 }
 
 func (i UpdateIssueRequest) MarshalJSON() ([]byte, error) {
@@ -165,66 +167,6 @@ type IssueUpdateInput struct {
 type issueCreateMutation struct {
 	Issue   Issue           `graphql:"issue"`
 	Success graphql.Boolean `graphql:"success"`
-}
-
-func (c Client) AssignIssue(ctx context.Context, id string, assigneeID string) error {
-	issue, found, err := c.FindIssue(ctx, id)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return errors.New("issue not found")
-	}
-	teamID, ok := graphQLIDString(issue.Team.ID)
-	if !ok {
-		return errors.New("issue team ID missing")
-	}
-
-	states, err := c.WorkflowStates(ctx, teamID)
-	if err != nil {
-		return err
-	}
-
-	// Find "In Progress" state
-	var inProgressID graphql.ID
-	for _, state := range states {
-		if string(state.Name) == "In Progress" {
-			inProgressID = state.ID
-			break
-		}
-	}
-	if inProgressID == "" {
-		return errors.New("in progress state not found")
-	}
-
-	var m struct {
-		IssueUpdate issuePayload `graphql:"issueUpdate(id: $id, input: $input)"`
-	}
-	variables := map[string]any{
-		"id": graphql.String(id),
-		"input": IssueUpdateInput{
-			AssigneeID: newNullableID(assigneeID),
-			StateID:    inProgressID,
-		},
-	}
-	return c.client.Mutate(ctx, &m, variables)
-}
-
-type assignedIssuesQuery struct {
-	Viewer struct {
-		AssignedIssues struct {
-			Nodes []Issue `graphql:"nodes"`
-		} `graphql:"assignedIssues"`
-	} `graphql:"viewer"`
-}
-
-func (c Client) AssignedIssues(ctx context.Context) ([]Issue, error) {
-	var q assignedIssuesQuery
-	err := c.client.Query(ctx, &q, nil)
-	if err != nil {
-		return nil, err
-	}
-	return q.Viewer.AssignedIssues.Nodes, nil
 }
 
 func (c Client) CreateIssue(ctx context.Context, input IssueCreateInput) (Issue, error) {
@@ -305,6 +247,9 @@ func newIssueUpdateInput(input UpdateIssueRequest) IssueUpdateInput {
 	}
 	if input.ClearParent {
 		output.ParentID = &nullableID{}
+	}
+	if input.SetState {
+		output.StateID = graphQLID(input.StateID)
 	}
 	return output
 }
